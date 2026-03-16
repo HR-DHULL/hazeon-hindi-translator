@@ -5,7 +5,9 @@ import ProgressTracker from './components/ProgressTracker';
 import Dashboard from './components/Dashboard';
 import Header from './components/Header';
 
-const socket = io();
+// In production on Netlify, Socket.IO is proxied through netlify.toml redirects
+// so we connect to the same origin. In dev, Vite proxy handles it.
+const socket = io(window.location.origin, { path: '/socket.io' });
 
 function App() {
   const [currentJob, setCurrentJob] = useState(null);

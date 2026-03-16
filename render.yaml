@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: hazeon-hindi-translator
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false   # fill in Render dashboard
+      - key: SUPABASE_SERVICE_KEY
+        sync: false   # fill in Render dashboard

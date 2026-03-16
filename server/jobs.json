@@ -24,5 +24,45 @@
     "totalChunks": 117,
     "currentChunk": 117,
     "completedAt": "2026-03-16T06:33:47.457Z"
+  },
+  "3c0b67ec-f98c-41f3-bb61-5bb67f3e1d38": {
+    "id": "3c0b67ec-f98c-41f3-bb61-5bb67f3e1d38",
+    "originalName": "IMTIHAAN HCS TEST-11 (ENGLISH SOL).docx",
+    "bookContext": "",
+    "status": "completed",
+    "progress": 100,
+    "message": "Translation completed successfully!",
+    "createdAt": "2026-03-16T06:39:32.851Z",
+    "outputFiles": [
+      {
+        "format": "docx",
+        "path": "C:\\Users\\harsh\\Desktop\\Harsh Dhull\\Hazeon\\Hazeon Hindi Translator\\server\\uploads\\output\\IMTIHAAN HCS TEST-11 (ENGLISH SOL)_hindi.docx",
+        "name": "IMTIHAAN HCS TEST-11 (ENGLISH SOL)_hindi.docx"
+      },
+      {
+        "format": "pdf",
+        "path": "C:\\Users\\harsh\\Desktop\\Harsh Dhull\\Hazeon\\Hazeon Hindi Translator\\server\\uploads\\output\\IMTIHAAN HCS TEST-11 (ENGLISH SOL)_hindi.pdf",
+        "name": "IMTIHAAN HCS TEST-11 (ENGLISH SOL)_hindi.pdf"
+      }
+    ],
+    "pageCount": 39,
+    "charCount": 73066,
+    "totalChunks": 117,
+    "currentChunk": 117,
+    "completedAt": "2026-03-16T06:40:53.108Z"
+  },
+  "095786ed-4d79-45ff-a21f-a93a859c89b0": {
+    "id": "095786ed-4d79-45ff-a21f-a93a859c89b0",
+    "originalName": "IMTIHAAN HCS TEST-11 (ENGLISH SOL).docx",
+    "bookContext": "Assertion translation must be Kathan in hindi not dawa",
+    "status": "processing",
+    "progress": 67,
+    "message": "Translating paragraphs 861–870 of 1170...",
+    "createdAt": "2026-03-16T06:45:59.349Z",
+    "outputFiles": [],
+    "pageCount": 39,
+    "charCount": 73066,
+    "totalChunks": 117,
+    "currentChunk": 87
   }
 }

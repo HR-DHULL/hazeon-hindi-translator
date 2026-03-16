@@ -7,3 +7,5 @@ server/uploads/*.txt
 server/uploads/output/*
 !server/uploads/output/.gitkeep
 .env
+.env.local
+server/jobs.json
