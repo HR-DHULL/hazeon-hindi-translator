@@ -1,19 +1,16 @@
 [build]
-  base    = "client"
-  command = "npm install && npm run build"
-  publish = "dist"
+  command = "npm install && cd client && npm install && npm run build"
+  publish = "client/dist"
+  functions = "netlify/functions"
 
-# Proxy all API calls to the Render backend
+[functions]
+  node_bundler = "esbuild"
+  included_files = ["server/**"]
+
+# Route API calls to the serverless function
 [[redirects]]
   from   = "/api/*"
-  to     = "https://hazeon-hindi-translator.onrender.com/api/:splat"
-  status = 200
-  force  = true
-
-# Proxy Socket.IO (real-time progress) to Render backend
-[[redirects]]
-  from   = "/socket.io/*"
-  to     = "https://hazeon-hindi-translator.onrender.com/socket.io/:splat"
+  to     = "/.netlify/functions/api/api/:splat"
   status = 200
   force  = true
 

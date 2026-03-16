@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 process.on('uncaughtException', (err) => {
   if (err.code === 'EPIPE' || err.code === 'ECONNRESET') return;
   console.error('Uncaught exception:', err);
@@ -34,10 +36,13 @@ if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
   });
 }
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`\n  UPSC Hindi Translator running on http://localhost:${PORT}`);
-  console.log(`  Translation engine: Google Translate (EN -> HI Devanagari)\n`);
-});
+// Only listen when running as a standalone server (not serverless)
+if (!process.env.NETLIFY && !process.env.VERCEL) {
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => {
+    console.log(`\n  UPSC Hindi Translator running on http://localhost:${PORT}`);
+    console.log(`  Translation engine: Google Translate (EN -> HI Devanagari)\n`);
+  });
+}
 
 export default app;

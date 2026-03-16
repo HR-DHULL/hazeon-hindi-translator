@@ -74,6 +74,30 @@ export async function uploadOutputFile(jobId, filename, filePath) {
   return data.publicUrl;
 }
 
+// ─── Supabase Storage for temporary uploaded files (serverless) ──────────────
+
+const TEMP_BUCKET = 'temp-uploads';
+
+export async function uploadTempFile(jobId, filename, buffer) {
+  const storagePath = `${jobId}/${filename}`;
+  const { error } = await supabase.storage
+    .from(TEMP_BUCKET)
+    .upload(storagePath, buffer, {
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      upsert: true,
+    });
+  if (error) throw error;
+  return storagePath;
+}
+
+export async function downloadTempFile(storagePath) {
+  const { data, error } = await supabase.storage
+    .from(TEMP_BUCKET)
+    .download(storagePath);
+  if (error) throw error;
+  return Buffer.from(await data.arrayBuffer());
+}
+
 // ─── Row ↔ Job mappers ───────────────────────────────────────────────────────
 
 function jobToRow(job) {

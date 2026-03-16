@@ -14,6 +14,7 @@ import {
   dbUpdateJob,
   dbCountActiveJobs,
   uploadOutputFile,
+  uploadTempFile,
 } from '../services/database.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,14 +24,15 @@ const router = express.Router();
 
 const MAX_CONCURRENT_JOBS = 2;
 
-// Use /tmp on Vercel (serverless), local uploads dir otherwise
-const OUTPUT_DIR = process.env.VERCEL
+// Use /tmp on serverless (Vercel/Netlify), local uploads dir otherwise
+const isServerless = !!(process.env.VERCEL || process.env.NETLIFY);
+const OUTPUT_DIR = isServerless
   ? '/tmp/output'
   : path.join(__dirname, '..', 'uploads', 'output');
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 // Configure multer for file uploads
-const UPLOAD_DIR = process.env.VERCEL ? '/tmp' : path.join(__dirname, '..', 'uploads');
+const UPLOAD_DIR = isServerless ? '/tmp' : path.join(__dirname, '..', 'uploads');
 const storage = multer.diskStorage({
   destination: UPLOAD_DIR,
   filename: (req, file, cb) => {
@@ -99,11 +101,31 @@ router.post('/upload', (req, res, next) => {
 
   res.json({ jobId, message: 'Translation started', originalName });
 
-  processTranslation(jobId, req.file.path, baseName, bookContext)
-    .catch(async (error) => {
-      console.error(`Job ${jobId} failed:`, error);
-      try { await dbUpdateJob(jobId, { status: 'failed', message: error.message }); } catch {}
-    });
+  if (process.env.NETLIFY) {
+    // Serverless: upload file to Supabase temp storage, trigger background function
+    try {
+      const fileBuffer = fs.readFileSync(req.file.path);
+      const tempPath = await uploadTempFile(jobId, req.file.filename, fileBuffer);
+      const siteUrl = process.env.URL || process.env.DEPLOY_PRIME_URL || 'http://localhost:8888';
+      fetch(`${siteUrl}/.netlify/functions/translate-background`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId, tempPath, baseName, bookContext }),
+      }).catch((err) => console.error('Failed to trigger background function:', err));
+    } catch (err) {
+      console.error('Failed to queue background translation:', err);
+      try { await dbUpdateJob(jobId, { status: 'failed', message: err.message }); } catch {}
+    }
+    // Cleanup local temp file
+    fs.unlink(req.file.path, () => {});
+  } else {
+    // Local / Render: process in background
+    processTranslation(jobId, req.file.path, baseName, bookContext)
+      .catch(async (error) => {
+        console.error(`Job ${jobId} failed:`, error);
+        try { await dbUpdateJob(jobId, { status: 'failed', message: error.message }); } catch {}
+      });
+  }
 });
 
 // ─── GET /api/translate/status/:jobId ────────────────────────────────────────
