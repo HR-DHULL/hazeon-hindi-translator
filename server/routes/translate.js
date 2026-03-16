@@ -28,15 +28,34 @@ const router = express.Router();
 
 const MAX_CONCURRENT_JOBS = 2;
 
-// Use /tmp on serverless (Vercel/Netlify), local uploads dir otherwise
-const isServerless = !!(process.env.VERCEL || process.env.NETLIFY);
-const OUTPUT_DIR = isServerless
-  ? '/tmp/output'
-  : path.join(_dirname, '..', 'uploads', 'output');
-fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+// Use /tmp on serverless (Vercel/Netlify/Lambda).
+// Detect serverless by env vars OR by checking if we're in a read-only filesystem (/var/task).
+const isServerless = !!(
+  process.env.VERCEL ||
+  process.env.NETLIFY ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.LAMBDA_TASK_ROOT ||
+  _dirname.startsWith('/var/task')
+);
 
-// Configure multer for file uploads
-const UPLOAD_DIR = isServerless ? '/tmp' : path.join(_dirname, '..', 'uploads');
+let OUTPUT_DIR, UPLOAD_DIR;
+if (isServerless) {
+  OUTPUT_DIR = '/tmp/output';
+  UPLOAD_DIR = '/tmp';
+} else {
+  OUTPUT_DIR = path.join(_dirname, '..', 'uploads', 'output');
+  UPLOAD_DIR = path.join(_dirname, '..', 'uploads');
+}
+
+try {
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+} catch (e) {
+  // Fallback to /tmp if the directory is read-only
+  console.warn(`Cannot create ${OUTPUT_DIR}: ${e.message}. Falling back to /tmp.`);
+  OUTPUT_DIR = '/tmp/output';
+  UPLOAD_DIR = '/tmp';
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
 const storage = multer.diskStorage({
   destination: UPLOAD_DIR,
   filename: (req, file, cb) => {

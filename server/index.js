@@ -21,10 +21,16 @@ try {
   _dirname = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 }
 
-// Ensure upload dirs exist locally (Vercel uses /tmp instead)
-if (process.env.NODE_ENV !== 'production') {
-  const uploadsDir = path.join(_dirname, 'uploads');
-  fs.mkdirSync(path.join(uploadsDir, 'output'), { recursive: true });
+// Ensure upload dirs exist locally (serverless uses /tmp instead)
+const isServerlessEnv = !!(
+  process.env.VERCEL || process.env.NETLIFY ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME || _dirname.startsWith('/var/task')
+);
+if (!isServerlessEnv) {
+  try {
+    const uploadsDir = path.join(_dirname, 'uploads');
+    fs.mkdirSync(path.join(uploadsDir, 'output'), { recursive: true });
+  } catch { /* ignore on read-only filesystems */ }
 }
 
 const app = express();
