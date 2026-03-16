@@ -94,8 +94,26 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
 }
 
 /**
+ * Unescape XML entities back to plain text.
+ * DOCX XML stores & as &amp;, < as &lt;, etc.
+ * We must decode these before sending text to Google Translate,
+ * otherwise "Research &amp; Training" → Google sees literal "&amp;" →
+ * translates & to "एवं" but leaves "amp;" as remnant garbage.
+ */
+function unescapeXml(str) {
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
+}
+
+/**
  * Extract paragraph texts from DOCX XML in order.
  * Only returns paragraphs that have actual text content.
+ * XML entities are unescaped to plain text for translation.
  */
 export function extractParagraphTexts(xml) {
   const paragraphs = [];
@@ -105,7 +123,7 @@ export function extractParagraphTexts(xml) {
       textParts.push(text);
       return _;
     });
-    const fullText = textParts.join('').trim();
+    const fullText = unescapeXml(textParts.join('').trim());
     if (fullText) {
       paragraphs.push(fullText);
     }
