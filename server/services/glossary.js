@@ -249,34 +249,23 @@ export function applyGlossaryPostProcessing(translatedText, originalText) {
     }
   }
 
-  // Handle acronyms specially: expand on first occurrence
-  const acronyms = {
-    'UPSC': 'संघ लोक सेवा आयोग (UPSC)',
-    'HCS': 'हरियाणा सिविल सेवा (HCS)',
-    'GDP': 'सकल घरेलू उत्पाद (GDP)',
-    'RBI': 'भारतीय रिजर्व बैंक (RBI)',
-    'FDI': 'प्रत्यक्ष विदेशी निवेश (FDI)',
-    'GST': 'वस्तु एवं सेवा कर (GST)',
-    'OBC': 'अन्य पिछड़ा वर्ग (OBC)',
-    'ISRO': 'भारतीय अंतरिक्ष अनुसंधान संगठन (ISRO)',
-    'SAARC': 'दक्षिण एशियाई क्षेत्रीय सहयोग संगठन (SAARC)',
-    'BRICS': 'ब्रिक्स (BRICS)',
-    'G20': 'जी-20 (G20)',
-  };
-
-  for (const [acronym, expanded] of Object.entries(acronyms)) {
-    if (!upperOriginal.includes(acronym)) continue;
-
-    // Replace first occurrence of the standalone acronym in translated text
-    const acronymRegex = new RegExp(`\\b${escapeRegex(acronym)}\\b`);
-    if (acronymRegex.test(result)) {
-      result = result.replace(acronymRegex, expanded);
-      // Replace subsequent occurrences with just the acronym
-      result = result.replace(new RegExp(`\\b${escapeRegex(acronym)}\\b`, 'g'), acronym);
-    }
-  }
-
   return result;
+}
+
+/**
+ * Parse custom abbreviation definitions from bookContext string.
+ * Supports formats like: "SC=Supreme Court, HC=High Court" or "SC:Supreme Court"
+ * Returns an array of abbreviation strings to protect (e.g. ['SC', 'HC']).
+ */
+export function parseCustomAbbreviations(bookContext = '') {
+  if (!bookContext) return [];
+  const abbrs = [];
+  // Match patterns like SC=..., HC=..., IAS=... or SC:...
+  const matches = bookContext.matchAll(/\b([A-Z]{2,8})\s*[=:]\s*\w/g);
+  for (const match of matches) {
+    abbrs.push(match[1]);
+  }
+  return abbrs;
 }
 
 /**

@@ -14,8 +14,46 @@ const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
-// Store active jobs
-const jobs = new Map();
+// Persist jobs to a JSON file so history survives server restarts
+const JOBS_FILE = path.join(__dirname, '..', 'jobs.json');
+
+function loadJobs() {
+  try {
+    if (fs.existsSync(JOBS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8'));
+      return new Map(Object.entries(data));
+    }
+  } catch {}
+  return new Map();
+}
+
+function saveJobs() {
+  try {
+    fs.writeFileSync(JOBS_FILE, JSON.stringify(Object.fromEntries(jobs), null, 2));
+  } catch (e) {
+    console.error('Failed to save jobs:', e.message);
+  }
+}
+
+// Store active jobs (loaded from disk on startup)
+const jobs = loadJobs();
+
+// Mark any jobs that were "processing" at server shutdown as failed
+for (const job of jobs.values()) {
+  if (job.status === 'processing') {
+    job.status = 'failed';
+    job.message = 'Server was restarted while job was in progress.';
+  }
+}
+saveJobs();
+
+// Concurrency limiter: max 2 large jobs at once to prevent OOM on big files
+let activeJobs = 0;
+const MAX_CONCURRENT_JOBS = 2;
+
+// Ensure output directory exists
+const OUTPUT_DIR = path.join(__dirname, '..', 'uploads', 'output');
+fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -28,33 +66,46 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = ['.pdf', '.docx', '.txt'];
     const ext = path.extname(file.originalname).toLowerCase();
-    if (allowed.includes(ext)) {
+    if (ext === '.pdf' || ext === '.txt') {
+      cb(new Error('Only DOCX files are supported. PDF and TXT cannot preserve formatting. Please convert to DOCX first.'));
+    } else if (ext === '.docx') {
       cb(null, true);
     } else {
-      cb(new Error(`Unsupported file type: ${ext}. Allowed: ${allowed.join(', ')}`));
+      cb(new Error(`Unsupported file type: ${ext}. Only .docx files are accepted.`));
     }
   },
 });
 
 // POST /api/translate/upload
-router.post('/upload', upload.single('file'), async (req, res) => {
+router.post('/upload', (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}, async (req, res) => {
   const io = req.app.get('io');
 
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
 
+  if (activeJobs >= MAX_CONCURRENT_JOBS) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(429).json({ error: `Too many translations in progress (max ${MAX_CONCURRENT_JOBS}). Please wait for a job to finish.` });
+  }
+
   const jobId = uuidv4();
   const originalName = req.file.originalname;
   const baseName = path.basename(originalName, path.extname(originalName));
+  const bookContext = (req.body.bookContext || '').trim();
 
   const job = {
     id: jobId,
     originalName,
+    bookContext,
     status: 'processing',
     progress: 0,
     message: 'File uploaded, starting parsing...',
@@ -63,17 +114,24 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   };
 
   jobs.set(jobId, job);
+  saveJobs();
+  activeJobs++;
   res.json({ jobId, message: 'Translation started', originalName });
 
-  processTranslation(jobId, req.file.path, baseName, io).catch((error) => {
-    console.error(`Job ${jobId} failed:`, error);
-    const job = jobs.get(jobId);
-    if (job) {
-      job.status = 'failed';
-      job.message = error.message;
-      io.emit(`job:${jobId}`, { ...job });
-    }
-  });
+  processTranslation(jobId, req.file.path, baseName, bookContext, io)
+    .catch((error) => {
+      console.error(`Job ${jobId} failed:`, error);
+      const job = jobs.get(jobId);
+      if (job) {
+        job.status = 'failed';
+        job.message = error.message;
+        io.emit(`job:${jobId}`, { ...job });
+        saveJobs();
+      }
+    })
+    .finally(() => {
+      activeJobs = Math.max(0, activeJobs - 1);
+    });
 });
 
 // GET /api/translate/status/:jobId
@@ -110,14 +168,15 @@ router.get('/jobs', (req, res) => {
  *   PDF  → chunk translation + from-scratch output
  *   TXT  → chunk translation + from-scratch output
  */
-async function processTranslation(jobId, filePath, baseName, io) {
+async function processTranslation(jobId, filePath, baseName, bookContext, io) {
   const job = jobs.get(jobId);
-  const outputDir = path.join(__dirname, '..', 'uploads', 'output');
+  const outputDir = OUTPUT_DIR;
   const inputExt = path.extname(filePath).toLowerCase();
 
   const emit = (updates) => {
     Object.assign(job, updates);
     io.emit(`job:${jobId}`, { ...job });
+    saveJobs();
   };
 
   try {
@@ -144,7 +203,7 @@ async function processTranslation(jobId, filePath, baseName, io) {
       });
 
       // Step 2: Translate paragraphs (batched, 1-to-1 mapping)
-      const translatedParagraphs = await translateParagraphs(paragraphs, (progress) => {
+      const translatedParagraphs = await translateParagraphs(paragraphs, bookContext, (progress) => {
         const overallPercent = 15 + Math.round((progress.percent / 100) * 70);
         emit({
           progress: overallPercent,
