@@ -1,0 +1,28 @@
+{
+  "name": "upsc-hindi-translator",
+  "version": "1.0.0",
+  "description": "UPSC/HCS Hindi Translation Tool - English to Hindi (Devanagari)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "node server/index.js",
+    "client": "cd client && npm run dev",
+    "build": "cd client && npm run build",
+    "start": "NODE_ENV=production node server/index.js",
+    "install:all": "npm install && cd client && npm install"
+  },
+  "dependencies": {
+    "concurrently": "^9.0.0",
+    "cors": "^2.8.5",
+    "docx": "^9.1.0",
+    "express": "^4.21.0",
+    "google-translate-api-x": "^10.7.2",
+    "mammoth": "^1.8.0",
+    "multer": "^1.4.5-lts.1",
+    "pdf-parse": "^1.1.1",
+    "pdfkit": "^0.15.0",
+    "socket.io": "^4.7.5",
+    "uuid": "^10.0.0"
+  }
+}

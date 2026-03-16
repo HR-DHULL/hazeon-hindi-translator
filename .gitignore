@@ -1,0 +1,9 @@
+node_modules/
+client/node_modules/
+client/dist/
+server/uploads/*.pdf
+server/uploads/*.docx
+server/uploads/*.txt
+server/uploads/output/*
+!server/uploads/output/.gitkeep
+.env
