@@ -156,7 +156,7 @@ function protectMCQPatterns(text, map) {
 function protectMatchCodes(text, map) {
   let result = text;
 
-  // Protect full match code sequences: "A-1, B-2, C-3, D-4" or "A-1, B-2, C-3, D-4"
+  // Protect full match code sequences: "A-1, B-2, C-3, D-4"
   result = result.replace(
     /\b([A-Da-d])[-.:]\s*(\d)\s*,\s*([A-Da-d])[-.:]\s*(\d)\s*,\s*([A-Da-d])[-.:]\s*(\d)\s*,\s*([A-Da-d])[-.:]\s*(\d)\b/g,
     (match) => {
@@ -166,9 +166,25 @@ function protectMatchCodes(text, map) {
     }
   );
 
+  // Protect individual match codes with number: "A-3:", "B-1:", "C-2:", "D-4:"
+  // These appear in solution explanations like "A-3: Kunal is famous for..."
+  result = result.replace(/\b([A-Da-d])\s*[-–]\s*(\d)\s*[:：]/g, (match) => {
+    const ph = nextPlaceholder();
+    map.set(ph, match);
+    return ph;
+  });
+
   // Protect individual match codes at start of table cells or lines: "A." "B." "C." "D."
   // (used as row labels in match-the-following tables)
   result = result.replace(/(?:^|(?<=\s))([A-D])\.\s/gm, (match) => {
+    const ph = nextPlaceholder();
+    map.set(ph, match);
+    return ph;
+  });
+
+  // Protect standalone codes like "ए-2" or "A-2" patterns in answer explanations
+  // e.g. "ए-2: मास्टर तारा सिंह..." should keep "A-2" in English
+  result = result.replace(/\b([A-Da-d])\s*[-–]\s*(\d)\b/g, (match) => {
     const ph = nextPlaceholder();
     map.set(ph, match);
     return ph;
