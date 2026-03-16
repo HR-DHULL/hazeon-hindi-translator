@@ -7,6 +7,12 @@
   node_bundler = "esbuild"
   included_files = ["server/**"]
 
+[functions."api"]
+  external_node_modules = ["express", "multer", "mammoth", "pdfkit", "jszip"]
+
+[functions."translate-background"]
+  external_node_modules = ["mammoth", "pdfkit", "jszip"]
+
 # Route API calls to the serverless function
 [[redirects]]
   from   = "/api/*"

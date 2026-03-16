@@ -13,12 +13,17 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import translateRouter from './routes/translate.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Works in both native ESM and esbuild CJS bundle
+let _dirname;
+try {
+  _dirname = path.dirname(fileURLToPath(import.meta.url));
+} catch {
+  _dirname = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+}
 
 // Ensure upload dirs exist locally (Vercel uses /tmp instead)
 if (process.env.NODE_ENV !== 'production') {
-  const uploadsDir = path.join(__dirname, 'uploads');
+  const uploadsDir = path.join(_dirname, 'uploads');
   fs.mkdirSync(path.join(uploadsDir, 'output'), { recursive: true });
 }
 
@@ -30,9 +35,9 @@ app.use('/api/translate', translateRouter);
 
 // Serve React build in local production mode
 if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
-  app.use(express.static(path.join(__dirname, '..', 'client', 'dist')));
+  app.use(express.static(path.join(_dirname, '..', 'client', 'dist')));
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '..', 'client', 'dist', 'index.html'));
+    res.sendFile(path.join(_dirname, '..', 'client', 'dist', 'index.html'));
   });
 }
 

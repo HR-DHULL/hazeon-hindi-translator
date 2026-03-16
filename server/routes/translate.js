@@ -17,8 +17,12 @@ import {
   uploadTempFile,
 } from '../services/database.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+let _dirname;
+try {
+  _dirname = path.dirname(fileURLToPath(import.meta.url));
+} catch {
+  _dirname = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+}
 
 const router = express.Router();
 
@@ -28,11 +32,11 @@ const MAX_CONCURRENT_JOBS = 2;
 const isServerless = !!(process.env.VERCEL || process.env.NETLIFY);
 const OUTPUT_DIR = isServerless
   ? '/tmp/output'
-  : path.join(__dirname, '..', 'uploads', 'output');
+  : path.join(_dirname, '..', 'uploads', 'output');
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 // Configure multer for file uploads
-const UPLOAD_DIR = isServerless ? '/tmp' : path.join(__dirname, '..', 'uploads');
+const UPLOAD_DIR = isServerless ? '/tmp' : path.join(_dirname, '..', 'uploads');
 const storage = multer.diskStorage({
   destination: UPLOAD_DIR,
   filename: (req, file, cb) => {
