@@ -12,6 +12,7 @@ import {
   dbGetJob,
   dbGetAllJobs,
   dbUpdateJob,
+  dbCountActiveJobs,
   uploadOutputFile,
 } from '../services/database.js';
 
@@ -20,17 +21,18 @@ const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
-// Concurrency limiter: max 2 large jobs at once to prevent OOM on big files
-let activeJobs = 0;
 const MAX_CONCURRENT_JOBS = 2;
 
-// Ensure local output directory exists (used during processing before upload)
-const OUTPUT_DIR = path.join(__dirname, '..', 'uploads', 'output');
+// Use /tmp on Vercel (serverless), local uploads dir otherwise
+const OUTPUT_DIR = process.env.VERCEL
+  ? '/tmp/output'
+  : path.join(__dirname, '..', 'uploads', 'output');
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 // Configure multer for file uploads
+const UPLOAD_DIR = process.env.VERCEL ? '/tmp' : path.join(__dirname, '..', 'uploads');
 const storage = multer.diskStorage({
-  destination: path.join(__dirname, '..', 'uploads'),
+  destination: UPLOAD_DIR,
   filename: (req, file, cb) => {
     const uniqueName = `${uuidv4()}${path.extname(file.originalname)}`;
     cb(null, uniqueName);
@@ -59,18 +61,19 @@ router.post('/upload', (req, res, next) => {
     next();
   });
 }, async (req, res) => {
-  const io = req.app.get('io');
-
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
 
-  if (activeJobs >= MAX_CONCURRENT_JOBS) {
-    fs.unlink(req.file.path, () => {});
-    return res.status(429).json({
-      error: `Too many translations in progress (max ${MAX_CONCURRENT_JOBS}). Please wait for a job to finish.`,
-    });
-  }
+  try {
+    const activeCount = await dbCountActiveJobs();
+    if (activeCount >= MAX_CONCURRENT_JOBS) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(429).json({
+        error: `Too many translations in progress (max ${MAX_CONCURRENT_JOBS}). Please wait for a job to finish.`,
+      });
+    }
+  } catch { /* allow if DB check fails */ }
 
   const jobId = uuidv4();
   const originalName = req.file.originalname;
@@ -92,21 +95,14 @@ router.post('/upload', (req, res, next) => {
     await dbCreateJob(job);
   } catch (err) {
     console.error('Failed to save job to database:', err.message);
-    // Continue anyway — job will still run, just won't persist
   }
 
-  activeJobs++;
   res.json({ jobId, message: 'Translation started', originalName });
 
-  processTranslation(jobId, req.file.path, baseName, bookContext, io)
+  processTranslation(jobId, req.file.path, baseName, bookContext)
     .catch(async (error) => {
       console.error(`Job ${jobId} failed:`, error);
-      const updates = { status: 'failed', message: error.message };
-      io.emit(`job:${jobId}`, { ...job, ...updates });
-      try { await dbUpdateJob(jobId, updates); } catch {}
-    })
-    .finally(() => {
-      activeJobs = Math.max(0, activeJobs - 1);
+      try { await dbUpdateJob(jobId, { status: 'failed', message: error.message }); } catch {}
     });
 });
 
@@ -153,12 +149,8 @@ router.get('/jobs', async (req, res) => {
 });
 
 // ─── Background translation pipeline ─────────────────────────────────────────
-async function processTranslation(jobId, filePath, baseName, bookContext, io) {
-  const jobSnapshot = { id: jobId };
-
+async function processTranslation(jobId, filePath, baseName, bookContext) {
   const emit = async (updates) => {
-    Object.assign(jobSnapshot, updates);
-    io.emit(`job:${jobId}`, { ...jobSnapshot });
     try { await dbUpdateJob(jobId, updates); } catch (e) {
       console.warn('DB update failed (non-fatal):', e.message);
     }

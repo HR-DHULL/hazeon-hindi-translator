@@ -7,7 +7,10 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
   const isProcessing = job.status === 'processing';
 
   const handleDownload = (format) => {
-    window.open(`/api/translate/download/${job.id}/${format}`, '_blank');
+    const file = job.outputFiles?.find((f) => f.format === format);
+    // Use Supabase Storage URL if available, fallback to API route
+    const url = file?.url || `/api/translate/download/${job.id}/${format}`;
+    window.open(url, '_blank');
   };
 
   const getStageStatus = (stageThreshold) => {

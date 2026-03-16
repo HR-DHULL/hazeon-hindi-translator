@@ -1,18 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { io } from 'socket.io-client';
+import React, { useState, useEffect, useRef } from 'react';
 import FileUpload from './components/FileUpload';
 import ProgressTracker from './components/ProgressTracker';
 import Dashboard from './components/Dashboard';
 import Header from './components/Header';
 
-// In production on Netlify, Socket.IO is proxied through netlify.toml redirects
-// so we connect to the same origin. In dev, Vite proxy handles it.
-const socket = io(window.location.origin, { path: '/socket.io' });
-
 function App() {
   const [currentJob, setCurrentJob] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [view, setView] = useState('upload');
+  const pollRef = useRef(null);
 
   useEffect(() => {
     fetch('/api/translate/jobs')
@@ -21,22 +17,33 @@ function App() {
       .catch(() => {});
   }, []);
 
+  // Poll job status every 2s while a job is processing
   useEffect(() => {
-    if (!currentJob?.id) return;
+    if (pollRef.current) clearInterval(pollRef.current);
 
-    const handler = (data) => {
-      setCurrentJob(data);
-      if (data.status === 'completed' || data.status === 'failed') {
-        fetch('/api/translate/jobs')
-          .then((r) => r.json())
-          .then(setJobs)
-          .catch(() => {});
-      }
-    };
+    if (!currentJob?.id || currentJob.status === 'completed' || currentJob.status === 'failed') {
+      return;
+    }
 
-    socket.on(`job:${currentJob.id}`, handler);
-    return () => socket.off(`job:${currentJob.id}`, handler);
-  }, [currentJob?.id]);
+    pollRef.current = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/translate/status/${currentJob.id}`);
+        if (!r.ok) return;
+        const data = await r.json();
+        setCurrentJob(data);
+
+        if (data.status === 'completed' || data.status === 'failed') {
+          clearInterval(pollRef.current);
+          fetch('/api/translate/jobs')
+            .then((r) => r.json())
+            .then(setJobs)
+            .catch(() => {});
+        }
+      } catch {}
+    }, 2000);
+
+    return () => clearInterval(pollRef.current);
+  }, [currentJob?.id, currentJob?.status]);
 
   const handleUploadComplete = (job) => {
     setCurrentJob(job);
@@ -77,7 +84,7 @@ function App() {
         )}
       </main>
       <footer className="footer">
-        <p>UPSC/HCS Hindi Translation Tool — Powered by Claude Code Agent SDK</p>
+        <p>Hazeon Hindi Translator — UPSC/HCS DOCX Translation Tool</p>
       </footer>
     </div>
   );

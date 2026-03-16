@@ -34,6 +34,15 @@ export async function dbCreateJob(job) {
   if (error) throw error;
 }
 
+export async function dbCountActiveJobs() {
+  const { count, error } = await supabase
+    .from('jobs')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'processing');
+  if (error) throw error;
+  return count || 0;
+}
+
 export async function dbUpdateJob(id, updates) {
   const { error } = await supabase
     .from('jobs')
