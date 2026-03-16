@@ -124,8 +124,9 @@ router.post('/upload', (req, res, next) => {
 
   res.json({ jobId, message: 'Translation started', originalName });
 
-  if (process.env.NETLIFY) {
-    // Serverless: upload file to Supabase temp storage, trigger background function
+  if (isServerless) {
+    // Serverless (Netlify/Vercel/Lambda): upload file to Supabase temp storage,
+    // then trigger the long-running background function.
     try {
       const fileBuffer = fs.readFileSync(req.file.path);
       const tempPath = await uploadTempFile(jobId, req.file.filename, fileBuffer);
