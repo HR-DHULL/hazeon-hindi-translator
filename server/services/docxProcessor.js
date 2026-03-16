@@ -115,10 +115,11 @@ export function extractParagraphTexts(xml) {
 }
 
 function escapeXml(str) {
+  // Only & < > need escaping in XML text nodes.
+  // " and ' do NOT need escaping in text content (only in attribute values).
+  // Escaping " causes Google Translate HTML entities to double-encode → visible &quot; in Word.
   return str
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+    .replace(/>/g, '&gt;');
 }

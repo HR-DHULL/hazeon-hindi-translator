@@ -58,20 +58,75 @@ function escapeRegex(str) {
 }
 
 /**
+ * Decode HTML entities that Google Translate sometimes returns in output.
+ * e.g. &quot; → "   &amp; → &   &#39; → '
+ */
+function decodeHtmlEntities(str) {
+  return str
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')   // must be last to avoid double-decoding
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
+}
+
+/**
+ * Protect MCQ option patterns so A/B/C/D answer choices stay in English.
+ * Handles: (a) (b) (A) (B)  |  a) b)  |  उत्तर: A  |  Answer: B
+ */
+function protectMCQPatterns(text, map) {
+  let result = text;
+  let idx = map.size;
+
+  // Protect answer key lines: "उत्तर: A" / "Answer: B" / "Ans: C"
+  result = result.replace(
+    /((?:उत्तर|Answer|Ans)[\s]*[:।]\s*)([A-Ea-e])\b/gi,
+    (match, prefix, letter) => {
+      const ph = `«MCQ${idx++}»`;
+      map.set(ph, match);
+      return ph;
+    }
+  );
+
+  // Protect bracketed options: (a) (b) (A) (B) (c) (d) (e)
+  result = result.replace(/\(([a-eA-E])\)/g, (match) => {
+    const ph = `«MCQ${idx++}»`;
+    map.set(ph, match);
+    return ph;
+  });
+
+  // Protect "a)" "b)" style at line start or after whitespace (not inside words)
+  result = result.replace(/(?<![a-zA-Z])([a-eA-E])\)(?=\s|$)/gm, (match) => {
+    const ph = `«MCQ${idx++}»`;
+    map.set(ph, match);
+    return ph;
+  });
+
+  return result;
+}
+
+/**
  * Translate a single chunk with abbreviation protection.
  */
 async function translateChunkRaw(text, customAbbrs = []) {
   if (!text.trim()) return text;
 
-  const { protected: safeText, map } = protectAbbreviations(text, customAbbrs);
+  // Build a shared placeholder map for both MCQ and abbreviation protection
+  const { protected: abbProtected, map } = protectAbbreviations(text, customAbbrs);
+  const mcqProtected = protectMCQPatterns(abbProtected, map);
 
-  const result = await translate(safeText, { from: 'en', to: 'hi' });
+  const result = await translate(mcqProtected, { from: 'en', to: 'hi' });
   let translated = result.text?.trim() || '';
 
+  // Decode any HTML entities Google Translate injected (e.g. &quot; → ")
+  translated = decodeHtmlEntities(translated);
+
+  // Restore abbreviations and MCQ placeholders
   translated = restoreAbbreviations(translated, map);
 
-  // Google Translate sometimes wraps output in double quotes — strip them
-  // only if the original text was NOT quoted
+  // Strip spurious surrounding quotes Google Translate sometimes adds
   const origTrimmed = text.trim();
   if (!origTrimmed.startsWith('"') && !origTrimmed.startsWith('\u201c')) {
     translated = translated.replace(/^[""\u201c\u201d]+|[""\u201c\u201d]+$/g, '').trim();
@@ -163,10 +218,11 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 
     try {
       const joined = batch.join(SEPARATOR);
-      const { protected: safeJoined, map } = protectAbbreviations(joined, customAbbrs);
+      const { protected: abbJoined, map } = protectAbbreviations(joined, customAbbrs);
+      const safeJoined = protectMCQPatterns(abbJoined, map);
 
       const result = await translate(safeJoined, { from: 'en', to: 'hi' });
-      let resultText = result.text || '';
+      let resultText = decodeHtmlEntities(result.text || '');
       resultText = restoreAbbreviations(resultText, map);
 
       const parts = resultText.split(/\n?\[?PARA_SEP\]?\n?/);
@@ -185,9 +241,10 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
         console.warn(`Batch ${b + 1}: split mismatch (got ${parts.length}, expected ${batch.length}). Translating individually.`);
         for (const para of batch) {
           try {
-            const { protected: safePara, map: pMap } = protectAbbreviations(para, customAbbrs);
+            const { protected: abbPara, map: pMap } = protectAbbreviations(para, customAbbrs);
+            const safePara = protectMCQPatterns(abbPara, pMap);
             const r = await translate(safePara, { from: 'en', to: 'hi' });
-            let t = restoreAbbreviations((r.text || '').trim(), pMap);
+            let t = restoreAbbreviations(decodeHtmlEntities((r.text || '').trim()), pMap);
             t = applyGlossaryPostProcessing(t, para);
             translated.push(t);
           } catch {
@@ -200,13 +257,14 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
       console.warn(`Batch ${b + 1} failed: ${err.message}. Translating individually.`);
       for (const para of batch) {
         try {
-          const { protected: safePara, map: pMap } = protectAbbreviations(para, customAbbrs);
+          const { protected: abbPara, map: pMap } = protectAbbreviations(para, customAbbrs);
+          const safePara = protectMCQPatterns(abbPara, pMap);
           const r = await translate(safePara, { from: 'en', to: 'hi' });
-          let t = restoreAbbreviations((r.text || '').trim(), pMap);
+          let t = restoreAbbreviations(decodeHtmlEntities((r.text || '').trim()), pMap);
           t = applyGlossaryPostProcessing(t, para);
           translated.push(t);
         } catch {
-          translated.push(para); // keep original if translation fails
+          translated.push(para);
         }
         await new Promise((r) => setTimeout(r, 200));
       }
