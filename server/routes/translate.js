@@ -4,6 +4,10 @@ import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
+// Safe __dirname for both Node.js and esbuild-bundled (Netlify) environments
+let __dirname = '/tmp';
+try { __dirname = path.dirname(fileURLToPath(import.meta.url)); } catch {}
+
 import {
   dbCreateJob,
   dbGetJob,
@@ -16,18 +20,14 @@ import { processTranslation } from '../services/translationPipeline.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sendTranslationEmail } from '../services/email.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 const MAX_CONCURRENT_JOBS = 2;
 
-// Use /tmp on Netlify/Vercel, local uploads otherwise
-const IS_SERVERLESS = !!(process.env.NETLIFY || process.env.VERCEL);
-const OUTPUT_DIR = IS_SERVERLESS
-  ? '/tmp/output'
-  : path.join(__dirname, '..', 'uploads', 'output');
-const UPLOAD_DIR = IS_SERVERLESS ? '/tmp' : path.join(__dirname, '..', 'uploads');
+// Use /tmp in production (Netlify, Render serverless), local path in dev
+const IS_PROD = process.env.NODE_ENV === 'production';
+const OUTPUT_DIR = IS_PROD ? '/tmp/output' : path.join(__dirname, '..', 'uploads', 'output');
+const UPLOAD_DIR = IS_PROD ? '/tmp' : path.join(__dirname, '..', 'uploads');
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -105,7 +105,7 @@ router.post('/upload', requireAuth, (req, res, next) => {
   // Respond immediately so the client gets the jobId right away
   res.json({ jobId, message: 'Translation started', originalName });
 
-  if (process.env.NETLIFY) {
+  if (process.env.NETLIFY || (IS_PROD && process.env.URL)) {
     // ── Netlify: upload file to Supabase Storage, trigger background function ──
     // (background function runs up to 15 min — no timeout issues)
     try {

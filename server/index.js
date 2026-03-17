@@ -13,8 +13,8 @@ import { fileURLToPath } from 'url';
 import translateRouter from './routes/translate.js';
 import authRouter from './routes/auth.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+let __dirname = '/app';
+try { __dirname = path.dirname(fileURLToPath(import.meta.url)); } catch {}
 
 // Ensure upload dirs exist locally (Vercel uses /tmp instead)
 if (process.env.NODE_ENV !== 'production') {
