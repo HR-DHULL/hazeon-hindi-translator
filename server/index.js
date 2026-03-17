@@ -38,9 +38,12 @@ if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
 }
 
 const PORT = process.env.PORT || 3001;
+const engine = process.env.ANTHROPIC_API_KEY
+  ? `Claude AI (${process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001'})`
+  : 'Google Translate (EN -> HI Devanagari)';
 app.listen(PORT, () => {
   console.log(`\n  UPSC Hindi Translator running on http://localhost:${PORT}`);
-  console.log(`  Translation engine: Google Translate (EN -> HI Devanagari)\n`);
+  console.log(`  Translation engine: ${engine}\n`);
 });
 
 export default app;
