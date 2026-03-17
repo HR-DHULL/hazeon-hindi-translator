@@ -8,7 +8,7 @@ import Dashboard from './components/Dashboard';
 import AdminUsers from './components/AdminUsers';
 
 function AppShell() {
-  const { isLoggedIn, authFetch } = useAuth();
+  const { isLoggedIn, authFetch, logout } = useAuth();
   const [currentJob, setCurrentJob] = useState(null);
   const [jobs, setJobs]             = useState([]);
   const [view, setView]             = useState('upload');
@@ -16,8 +16,11 @@ function AppShell() {
 
   const loadJobs = () =>
     authFetch('/api/translate/jobs')
-      .then(r => r.json())
-      .then(setJobs)
+      .then(r => {
+        if (r.status === 401) { logout(); return null; }
+        return r.json();
+      })
+      .then(data => { if (data && Array.isArray(data)) setJobs(data); })
       .catch(() => {});
 
   useEffect(() => {

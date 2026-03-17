@@ -99,6 +99,7 @@ router.post('/login', async (req, res) => {
 
   res.json({
     token: accessToken,
+    refreshToken: authData.refresh_token,
     user: {
       id: userId,
       email: authData.user?.email,
@@ -109,6 +110,36 @@ router.post('/login', async (req, res) => {
       pagesLimit: profile?.pages_limit ?? appMeta.pages_limit ?? 500,
     },
   });
+});
+
+// ─── POST /api/auth/refresh ───────────────────────────────────────────────────
+router.post('/refresh', async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) return res.status(400).json({ error: 'Refresh token required' });
+
+  try {
+    const authRes = await fetch(
+      `${process.env.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': process.env.SUPABASE_SERVICE_KEY,
+        },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      }
+    );
+    const authData = await authRes.json();
+    if (!authRes.ok || authData.error) {
+      return res.status(401).json({ error: 'Session expired, please log in again' });
+    }
+    res.json({
+      token: authData.access_token,
+      refreshToken: authData.refresh_token,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'Authentication service error' });
+  }
 });
 
 // ─── GET /api/auth/me ─────────────────────────────────────────────────────────
