@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Upload, File, AlertCircle, Languages, BookOpen, Info } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 const POPULAR_BOOKS = [
   'M. Laxmikanth - Indian Polity',
@@ -17,6 +18,7 @@ const POPULAR_BOOKS = [
 ];
 
 function FileUpload({ onUploadComplete }) {
+  const { authFetch } = useAuth();
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -79,7 +81,7 @@ function FileUpload({ onUploadComplete }) {
         formData.append('bookContext', bookContext.trim());
       }
 
-      const res = await fetch('/api/translate/upload', {
+      const res = await authFetch('/api/translate/upload', {
         method: 'POST',
         body: formData,
       });
