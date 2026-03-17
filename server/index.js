@@ -1,4 +1,14 @@
 import 'dotenv/config';
+
+// ── Validate required environment variables at startup ─────────────────────
+const REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY'];
+const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
+if (missing.length > 0) {
+  console.error(`FATAL: Missing required environment variables: ${missing.join(', ')}`);
+  console.error('Set these in your .env file or hosting provider before starting the server.');
+  process.exit(1);
+}
+
 process.on('uncaughtException', (err) => {
   if (err.code === 'EPIPE' || err.code === 'ECONNRESET') return;
   console.error('Uncaught exception:', err);
@@ -23,8 +33,25 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 const app = express();
-app.use(cors({ origin: '*' }));
-app.use(express.json());
+
+// ── CORS: restrict to allowed origins (default: allow all in dev) ──────────
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+  : null;
+
+app.use(cors({
+  origin: allowedOrigins
+    ? function (origin, cb) {
+        // Allow server-to-server (no origin) or whitelisted origins
+        if (!origin || allowedOrigins.includes(origin)) cb(null, true);
+        else cb(new Error('Not allowed by CORS'));
+      }
+    : '*', // dev fallback when ALLOWED_ORIGINS is not set
+  credentials: !!allowedOrigins,
+}));
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: false }));
 
 app.use('/api/auth', authRouter);
 app.use('/api/translate', translateRouter);

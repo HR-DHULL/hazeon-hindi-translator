@@ -65,7 +65,7 @@ function AppShell() {
         <div className="p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8">
           {view === 'upload'    && <FileUpload onUploadComplete={handleUploadComplete} />}
           {view === 'progress'  && currentJob && <ProgressTracker job={currentJob} onNewTranslation={handleNewTranslation} onViewDashboard={() => { loadJobs(); setView('dashboard'); }} />}
-          {view === 'dashboard' && <Dashboard jobs={jobs} onNewTranslation={handleNewTranslation} onRefresh={loadJobs} />}
+          {view === 'dashboard' && <Dashboard jobs={jobs} onNewTranslation={handleNewTranslation} onRefresh={loadJobs} authFetch={authFetch} />}
           {view === 'admin'     && <AdminUsers />}
         </div>
       </main>

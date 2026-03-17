@@ -10,13 +10,33 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-function Dashboard({ jobs, onNewTranslation, onRefresh }) {
+function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
   const completedJobs  = jobs.filter((j) => j.status === 'completed');
   const failedJobs     = jobs.filter((j) => j.status === 'failed');
   const processingJobs = jobs.filter((j) => j.status === 'processing');
 
-  const handleDownload = (jobId) => {
-    window.open(`/api/translate/download/${jobId}`, '_blank');
+  const handleDownload = async (jobId) => {
+    try {
+      const res = await authFetch(`/api/translate/download/${jobId}`);
+      if (!res.ok) {
+        console.error('Download failed:', res.status);
+        return;
+      }
+      // If server redirected to a public URL, the fetch followed it — read as blob
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const disposition = res.headers.get('Content-Disposition');
+      const match = disposition && disposition.match(/filename="?([^"]+)"?/);
+      a.download = match ? match[1] : `translated_${jobId}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download error:', err);
+    }
   };
 
   const formatDate = (dateStr) => {

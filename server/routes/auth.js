@@ -1,13 +1,40 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// ── Rate limiters ────────────────────────────────────────────────────────────
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,                   // 10 attempts per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60,             // 60 requests per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down.' },
+});
+
+router.use(apiLimiter);
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isValidUUID(id) { return typeof id === 'string' && UUID_RE.test(id); }
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const VALID_ROLES = ['user', 'admin'];
+const VALID_PLANS = ['free', 'pro'];
 
 // ── Direct REST helper (bypasses broken JS client DB queries) ─────────────────
 function restHeaders() {
@@ -32,7 +59,12 @@ async function restPost(path, body) {
     headers: restHeaders(),
     body: JSON.stringify(body),
   });
-  return r.json();
+  const data = await r.json();
+  if (!r.ok) {
+    const msg = data?.message || data?.error || JSON.stringify(data);
+    throw new Error(`REST POST ${path} failed (${r.status}): ${msg}`);
+  }
+  return data;
 }
 
 async function restPatch(path, body) {
@@ -41,7 +73,12 @@ async function restPatch(path, body) {
     headers: { ...restHeaders(), 'Prefer': 'return=representation' },
     body: JSON.stringify(body),
   });
-  return r.json();
+  const data = await r.json();
+  if (!r.ok) {
+    const msg = data?.message || data?.error || JSON.stringify(data);
+    throw new Error(`REST PATCH ${path} failed (${r.status}): ${msg}`);
+  }
+  return data;
 }
 
 async function restDelete(path) {
@@ -53,7 +90,7 @@ async function restDelete(path) {
 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 // Uses Supabase Auth REST API directly — more reliable than the JS client in serverless
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
@@ -194,11 +231,12 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
-  // Create in Supabase Auth
+  // Create in Supabase Auth (include app_metadata so JWT carries role/plan)
   const { data, error } = await supabase.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
+    app_metadata: { role, plan, pages_limit: pagesLimit },
   });
 
   if (error) return res.status(400).json({ error: error.message });
@@ -238,6 +276,16 @@ router.patch('/users/:id', requireAuth, requireAdmin, async (req, res) => {
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
+  }
+
+  // Sync app_metadata in Supabase Auth so JWT stays up-to-date
+  const metaUpdates = {};
+  if (role !== undefined) metaUpdates.role = role;
+  if (plan !== undefined) metaUpdates.plan = plan;
+  if (pagesLimit !== undefined) metaUpdates.pages_limit = pagesLimit;
+
+  if (Object.keys(metaUpdates).length > 0) {
+    await supabase.auth.admin.updateUserById(req.params.id, { app_metadata: metaUpdates });
   }
 
   // Ban/unban user in Auth

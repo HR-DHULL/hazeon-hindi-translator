@@ -1,4 +1,5 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -23,6 +24,15 @@ import { sendTranslationEmail } from '../services/email.js';
 
 const router = express.Router();
 const MAX_CONCURRENT_JOBS = 2;
+
+// Rate limit uploads: max 10 per 10 minutes per IP
+const uploadLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many uploads. Please wait before uploading again.' },
+});
 
 // Use /tmp in production (Netlify, Render serverless), local path in dev
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -52,7 +62,7 @@ const upload = multer({
 });
 
 // ─── POST /api/translate/upload ───────────────────────────────────────────────
-router.post('/upload', requireAuth, (req, res, next) => {
+router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message });
     next();

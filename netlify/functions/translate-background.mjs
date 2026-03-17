@@ -7,18 +7,33 @@
  * These run asynchronously — the 202 response is returned immediately.
  */
 import 'dotenv/config';
+import { timingSafeEqual } from 'crypto';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { dbUpdateJob, downloadInputFile, deleteInputFile } from '../../server/services/database.js';
 import { processTranslation } from '../../server/services/translationPipeline.js';
 
 const OUTPUT_DIR = '/tmp/output';
-const EXPECTED_SECRET = process.env.INTERNAL_SECRET || 'hazeon-internal-2024';
+
+function secretsMatch(a, b) {
+  if (!a || !b) return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
 
 export default async (req) => {
-  // Basic security — only accept calls from our own upload route
+  // Require INTERNAL_SECRET env var — no hardcoded fallback
+  const EXPECTED_SECRET = process.env.INTERNAL_SECRET;
+  if (!EXPECTED_SECRET) {
+    console.error('INTERNAL_SECRET env var is not set — rejecting background function call');
+    return new Response('Server misconfigured', { status: 500 });
+  }
+
+  // Timing-safe comparison to prevent timing attacks
   const incomingSecret = req.headers.get('x-internal-secret');
-  if (incomingSecret !== EXPECTED_SECRET) {
+  if (!secretsMatch(incomingSecret, EXPECTED_SECRET)) {
     return new Response('Forbidden', { status: 403 });
   }
 
