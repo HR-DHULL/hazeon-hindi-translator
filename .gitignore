@@ -9,3 +9,6 @@ server/uploads/output/*
 .env
 .env.local
 server/jobs.json
+
+# Local Netlify folder
+.netlify
