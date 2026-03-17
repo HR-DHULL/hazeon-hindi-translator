@@ -1,3 +1,4 @@
+import 'dotenv/config';
 process.on('uncaughtException', (err) => {
   if (err.code === 'EPIPE' || err.code === 'ECONNRESET') return;
   console.error('Uncaught exception:', err);
@@ -10,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import translateRouter from './routes/translate.js';
+import authRouter from './routes/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +26,7 @@ const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
+app.use('/api/auth', authRouter);
 app.use('/api/translate', translateRouter);
 
 // Serve React build in local production mode

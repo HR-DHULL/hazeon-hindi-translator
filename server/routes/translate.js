@@ -15,6 +15,7 @@ import {
   dbCountActiveJobs,
   uploadOutputFile,
 } from '../services/database.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,7 +56,7 @@ const upload = multer({
 });
 
 // ─── POST /api/translate/upload ───────────────────────────────────────────────
-router.post('/upload', (req, res, next) => {
+router.post('/upload', requireAuth, (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message });
     next();
@@ -82,6 +83,7 @@ router.post('/upload', (req, res, next) => {
 
   const job = {
     id: jobId,
+    userId: req.user.id,
     originalName,
     bookContext,
     status: 'processing',
@@ -107,7 +109,7 @@ router.post('/upload', (req, res, next) => {
 });
 
 // ─── GET /api/translate/status/:jobId ────────────────────────────────────────
-router.get('/status/:jobId', async (req, res) => {
+router.get('/status/:jobId', requireAuth, async (req, res) => {
   try {
     const job = await dbGetJob(req.params.jobId);
     res.json(job);
@@ -119,7 +121,7 @@ router.get('/status/:jobId', async (req, res) => {
 // ─── GET /api/translate/download/:jobId/:format ───────────────────────────────
 // Downloads work via Supabase Storage public URL stored in outputFiles.
 // This endpoint is kept for local dev fallback.
-router.get('/download/:jobId/:format', async (req, res) => {
+router.get('/download/:jobId/:format', requireAuth, async (req, res) => {
   try {
     const job = await dbGetJob(req.params.jobId);
     const file = job.outputFiles.find((f) => f.format === req.params.format);
@@ -138,9 +140,12 @@ router.get('/download/:jobId/:format', async (req, res) => {
 });
 
 // ─── GET /api/translate/jobs ──────────────────────────────────────────────────
-router.get('/jobs', async (req, res) => {
+router.get('/jobs', requireAuth, async (req, res) => {
   try {
-    const jobs = await dbGetAllJobs();
+    // Admins see all jobs; regular users see only their own
+    const jobs = await dbGetAllJobs(
+      req.user.role === 'admin' ? null : req.user.id
+    );
     res.json(jobs);
   } catch (err) {
     console.error('Failed to load jobs from database:', err.message);
