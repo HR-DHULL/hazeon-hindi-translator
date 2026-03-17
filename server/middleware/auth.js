@@ -1,21 +1,14 @@
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
-
-function restHeaders() {
+function restHeaders(token) {
   return {
     'Content-Type': 'application/json',
     'apikey': process.env.SUPABASE_SERVICE_KEY,
-    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+    'Authorization': `Bearer ${token || process.env.SUPABASE_SERVICE_KEY}`,
   };
 }
 
 /**
  * Middleware: verify Supabase JWT and attach user to req.
- * Rejects with 401 if token is missing or invalid.
+ * Uses REST API directly — reliable in both Node.js and Netlify serverless.
  */
 export async function requireAuth(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -26,12 +19,20 @@ export async function requireAuth(req, res, next) {
   const token = authHeader.slice(7);
 
   try {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) {
+    // Verify token via Supabase Auth REST API
+    const authRes = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        'apikey': process.env.SUPABASE_SERVICE_KEY,
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+    const user = await authRes.json();
+
+    if (!authRes.ok || !user.id) {
       return res.status(401).json({ error: 'Invalid or expired session' });
     }
 
-    // Fetch profile via REST API (JS client DB queries fail silently)
+    // Fetch profile via REST API
     let profile = null;
     try {
       const r = await fetch(

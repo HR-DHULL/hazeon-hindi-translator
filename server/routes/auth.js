@@ -52,35 +52,56 @@ async function restDelete(path) {
 }
 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
+// Uses Supabase Auth REST API directly — more reliable than the JS client in serverless
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) {
-    return res.status(401).json({ error: 'Invalid email or password' });
+  let authData;
+  try {
+    const authRes = await fetch(
+      `${process.env.SUPABASE_URL}/auth/v1/token?grant_type=password`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': process.env.SUPABASE_SERVICE_KEY,
+        },
+        body: JSON.stringify({ email, password }),
+      }
+    );
+    authData = await authRes.json();
+    if (!authRes.ok || authData.error) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+  } catch (e) {
+    console.error('Auth REST call failed:', e.message);
+    return res.status(500).json({ error: 'Authentication service error' });
   }
 
-  // Use REST API directly — JS client DB queries fail silently
+  const userId = authData.user?.id;
+  const accessToken = authData.access_token;
+
+  // Fetch profile via REST API
   let profile = null;
   try {
     const profiles = await restGet(
-      `user_profiles?id=eq.${data.user.id}&select=full_name,role,plan,pages_used,pages_limit`
+      `user_profiles?id=eq.${userId}&select=full_name,role,plan,pages_used,pages_limit`
     );
     profile = Array.isArray(profiles) ? profiles[0] : null;
   } catch (e) {
     console.warn('Profile REST fetch failed:', e.message);
   }
 
-  const appMeta = data.user.app_metadata || {};
+  const appMeta = authData.user?.app_metadata || {};
 
   res.json({
-    token: data.session.access_token,
+    token: accessToken,
     user: {
-      id: data.user.id,
-      email: data.user.email,
+      id: userId,
+      email: authData.user?.email,
       fullName: profile?.full_name || '',
       role:       profile?.role       ?? appMeta.role       ?? 'user',
       plan:       profile?.plan       ?? appMeta.plan       ?? 'free',
