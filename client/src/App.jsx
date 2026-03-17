@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import ErrorBoundary from './components/ErrorBoundary';
 import Login from './pages/Login';
 import Sidebar from './components/Sidebar';
 import FileUpload from './components/FileUpload';
@@ -21,7 +22,7 @@ function AppShell() {
         return r.json();
       })
       .then(data => { if (data && Array.isArray(data)) setJobs(data); })
-      .catch(() => {});
+      .catch((err) => { console.error('Failed to load jobs:', err.message); });
 
   useEffect(() => {
     if (isLoggedIn) loadJobs();
@@ -40,7 +41,9 @@ function AppShell() {
           clearInterval(pollRef.current);
           loadJobs();
         }
-      } catch {}
+      } catch (err) {
+        console.error('Polling error:', err.message);
+      }
     }, 2000);
     return () => clearInterval(pollRef.current);
   }, [currentJob?.id, currentJob?.status]);
@@ -94,5 +97,9 @@ function MobileNav({ view, setView }) {
 }
 
 export default function App() {
-  return <AuthProvider><AppShell /></AuthProvider>;
+  return (
+    <ErrorBoundary>
+      <AuthProvider><AppShell /></AuthProvider>
+    </ErrorBoundary>
+  );
 }

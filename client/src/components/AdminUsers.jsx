@@ -45,16 +45,34 @@ export default function AdminUsers() {
 
   const deleteUser = async (id, email) => {
     if (!confirm(`Delete ${email}?`)) return;
-    await authFetch(`/api/auth/users/${id}`, { method: 'DELETE' });
-    load();
+    try {
+      const r = await authFetch(`/api/auth/users/${id}`, { method: 'DELETE' });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setMsg(d.error || 'Failed to delete user');
+        return;
+      }
+      load();
+    } catch {
+      setMsg('Network error deleting user');
+    }
   };
 
   const toggleActive = async (id, currentlyActive) => {
-    await authFetch(`/api/auth/users/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ active: !currentlyActive }),
-    });
-    load();
+    try {
+      const r = await authFetch(`/api/auth/users/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ active: !currentlyActive }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setMsg(d.error || 'Failed to update user');
+        return;
+      }
+      load();
+    } catch {
+      setMsg('Network error updating user');
+    }
   };
 
   return (
@@ -180,7 +198,7 @@ export default function AdminUsers() {
                           <div className="h-full bg-indigo-500 rounded-full"
                             style={{ width: `${Math.min(100, ((u.pages_used || 0) / (u.pages_limit || 500)) * 100)}%` }} />
                         </div>
-                        <span className="text-slate-500 text-xs">{u.pages_used || 0}/{u.pages_limit}</span>
+                        <span className="text-slate-500 text-xs">{u.pages_used || 0}/{u.pages_limit || 500}</span>
                       </div>
                     </td>
                     <td className="px-5 py-3.5">

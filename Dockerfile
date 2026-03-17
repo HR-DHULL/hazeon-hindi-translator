@@ -2,13 +2,13 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# Install dependencies for both server and client
-COPY package.json package-lock.json* ./
-RUN npm install --omit=dev 2>/dev/null || npm install
+# Install dependencies for server (use ci for reproducible builds)
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 # Build React frontend
-COPY client/package.json client/package-lock.json* ./client/
-RUN cd client && npm install
+COPY client/package.json client/package-lock.json ./client/
+RUN cd client && npm ci
 
 COPY client/ ./client/
 RUN cd client && npm run build
