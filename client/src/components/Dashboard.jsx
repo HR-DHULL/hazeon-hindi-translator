@@ -6,127 +6,148 @@ import {
   Download,
   Clock,
   FileText,
-  PlusCircle,
+  Plus,
+  RefreshCw,
 } from 'lucide-react';
 
-function Dashboard({ jobs, onNewTranslation }) {
-  const completedJobs = jobs.filter((j) => j.status === 'completed');
-  const failedJobs = jobs.filter((j) => j.status === 'failed');
+function Dashboard({ jobs, onNewTranslation, onRefresh }) {
+  const completedJobs  = jobs.filter((j) => j.status === 'completed');
+  const failedJobs     = jobs.filter((j) => j.status === 'failed');
   const processingJobs = jobs.filter((j) => j.status === 'processing');
 
-  const handleDownload = (jobId, format) => {
-    window.open(`/api/translate/download/${jobId}/${format}`, '_blank');
+  const handleDownload = (jobId) => {
+    window.open(`/api/translate/download/${jobId}`, '_blank');
   };
 
   const formatDate = (dateStr) => {
     if (!dateStr) return '';
-    const d = new Date(dateStr);
-    return d.toLocaleDateString('en-IN', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+    return new Date(dateStr).toLocaleDateString('en-IN', {
+      day: 'numeric', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
     });
   };
 
+  const stats = [
+    { label: 'Total', value: jobs.length, color: 'text-slate-700', bg: 'bg-slate-50' },
+    { label: 'Completed', value: completedJobs.length, color: 'text-green-700', bg: 'bg-green-50' },
+    { label: 'In Progress', value: processingJobs.length, color: 'text-amber-700', bg: 'bg-amber-50' },
+    { label: 'Failed', value: failedJobs.length, color: 'text-red-700', bg: 'bg-red-50' },
+  ];
+
+  const statusConfig = {
+    completed: { icon: <CheckCircle size={16} className="text-green-500" />, badge: 'bg-green-50 text-green-700 border-green-100' },
+    failed:    { icon: <XCircle    size={16} className="text-red-500"   />, badge: 'bg-red-50 text-red-700 border-red-100'     },
+    processing: { icon: <Loader   size={16} className="text-amber-500 animate-spin" />, badge: 'bg-amber-50 text-amber-700 border-amber-100' },
+  };
+
   return (
-    <div className="dashboard-container">
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-value">{jobs.length}</div>
-          <div className="stat-label">Total Translations</div>
-        </div>
-        <div className="stat-card success">
-          <div className="stat-value">{completedJobs.length}</div>
-          <div className="stat-label">Completed</div>
-        </div>
-        <div className="stat-card warning">
-          <div className="stat-value">{processingJobs.length}</div>
-          <div className="stat-label">In Progress</div>
-        </div>
-        <div className="stat-card danger">
-          <div className="stat-value">{failedJobs.length}</div>
-          <div className="stat-label">Failed</div>
-        </div>
+    <div className="max-w-3xl mx-auto space-y-5">
+
+      {/* Stats row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {stats.map((s) => (
+          <div key={s.label} className={`${s.bg} rounded-xl px-4 py-3 border border-slate-100`}>
+            <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+            <p className="text-xs text-slate-500 mt-0.5">{s.label}</p>
+          </div>
+        ))}
       </div>
 
-      <div className="jobs-section">
-        <div className="jobs-header">
-          <h2>Translation History</h2>
-          <button className="primary-btn" onClick={onNewTranslation}>
-            <PlusCircle size={18} />
-            New Translation
-          </button>
+      {/* Jobs panel */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <h2 className="text-sm font-bold text-slate-900">Translation History</h2>
+          <div className="flex items-center gap-2">
+            {onRefresh && (
+              <button
+                onClick={onRefresh}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+                title="Refresh"
+              >
+                <RefreshCw size={14} />
+              </button>
+            )}
+            <button
+              onClick={onNewTranslation}
+              className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition shadow-sm shadow-indigo-200"
+            >
+              <Plus size={13} />
+              New Translation
+            </button>
+          </div>
         </div>
 
         {jobs.length === 0 ? (
-          <div className="empty-state">
-            <FileText size={48} />
-            <h3>No translations yet</h3>
-            <p>Upload your first document to get started</p>
-            <button className="primary-btn" onClick={onNewTranslation}>
+          <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+            <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center mb-3">
+              <FileText size={22} className="text-slate-400" />
+            </div>
+            <h3 className="text-sm font-semibold text-slate-700">No translations yet</h3>
+            <p className="text-xs text-slate-400 mt-1 mb-4">Upload your first document to get started</p>
+            <button
+              onClick={onNewTranslation}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition"
+            >
               Start Translating
             </button>
           </div>
         ) : (
-          <div className="jobs-list">
-            {jobs.map((job) => (
-              <div key={job.id} className={`job-card ${job.status}`}>
-                <div className="job-info">
-                  <div className="job-status-icon">
-                    {job.status === 'completed' && <CheckCircle size={20} />}
-                    {job.status === 'failed' && <XCircle size={20} />}
-                    {job.status === 'processing' && <Loader size={20} className="spin" />}
-                  </div>
-                  <div className="job-details">
-                    <span className="job-name">{job.originalName}</span>
-                    <div className="job-meta">
-                      <Clock size={12} />
+          <ul className="divide-y divide-slate-100">
+            {jobs.map((job) => {
+              const cfg = statusConfig[job.status] || statusConfig.processing;
+              return (
+                <li key={job.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50 transition">
+                  {/* Status icon */}
+                  <div className="shrink-0">{cfg.icon}</div>
+
+                  {/* File info */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-800 truncate">{job.originalName}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5 text-xs text-slate-400">
+                      <Clock size={10} />
                       <span>{formatDate(job.createdAt)}</span>
-                      {job.pageCount && <span> | {job.pageCount} pages</span>}
+                      {job.pageCount && <><span>·</span><span>{job.pageCount} pages</span></>}
                     </div>
-                  </div>
-                </div>
 
-                {job.status === 'processing' && (
-                  <div className="job-progress-mini">
-                    <div className="mini-bar">
-                      <div className="mini-fill" style={{ width: `${job.progress}%` }} />
-                    </div>
-                    <span>{job.progress}%</span>
-                  </div>
-                )}
+                    {/* Mini progress bar for processing */}
+                    {job.status === 'processing' && (
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <div className="flex-1 h-1 bg-slate-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-amber-400 rounded-full transition-all duration-500"
+                            style={{ width: `${job.progress}%` }}
+                          />
+                        </div>
+                        <span className="text-xs text-amber-600 font-medium shrink-0">{job.progress}%</span>
+                      </div>
+                    )}
 
-                {job.status === 'completed' && (
-                  <div className="job-actions">
+                    {/* Error hint */}
+                    {job.status === 'failed' && job.message && (
+                      <p className="text-xs text-red-500 mt-0.5 truncate">{job.message}</p>
+                    )}
+                  </div>
+
+                  {/* Status badge */}
+                  <span className={`hidden sm:inline-flex shrink-0 text-xs font-medium px-2 py-0.5 rounded-full border ${cfg.badge}`}>
+                    {job.status === 'completed' ? 'Done' : job.status === 'failed' ? 'Failed' : 'Processing'}
+                  </span>
+
+                  {/* Download button */}
+                  {job.status === 'completed' && (
                     <button
-                      className="icon-btn"
-                      onClick={() => handleDownload(job.id, 'docx')}
+                      onClick={() => handleDownload(job.id)}
+                      className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg transition border border-indigo-100 shrink-0"
                       title="Download DOCX"
                     >
-                      <Download size={16} />
-                      <span>DOCX</span>
+                      <Download size={12} />
+                      DOCX
                     </button>
-                    <button
-                      className="icon-btn"
-                      onClick={() => handleDownload(job.id, 'pdf')}
-                      title="Download PDF"
-                    >
-                      <Download size={16} />
-                      <span>PDF</span>
-                    </button>
-                  </div>
-                )}
-
-                {job.status === 'failed' && (
-                  <span className="job-error-hint" title={job.message}>
-                    Error
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
     </div>

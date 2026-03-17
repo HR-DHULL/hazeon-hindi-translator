@@ -5,16 +5,22 @@ export default function AdminUsers() {
   const { authFetch } = useAuth();
   const [users, setUsers]     = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [form, setForm]       = useState({ email: '', password: '', fullName: '', plan: 'free', pagesLimit: 500 });
   const [saving, setSaving]   = useState(false);
   const [msg, setMsg]         = useState('');
 
   const load = async () => {
-    setLoading(true);
+    setLoading(true); setLoadErr('');
     try {
       const r = await authFetch('/api/auth/users');
-      setUsers(await r.json());
+      const data = await r.json();
+      if (!r.ok) { setLoadErr(data.error || 'Failed to load users'); return; }
+      if (!Array.isArray(data)) { setLoadErr('Unexpected response from server'); return; }
+      setUsers(data);
+    } catch (e) {
+      setLoadErr('Network error. Try refreshing.');
     } finally { setLoading(false); }
   };
 
@@ -121,6 +127,11 @@ export default function AdminUsers() {
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
         {loading ? (
           <div className="p-8 text-center text-slate-400 text-sm">Loading users...</div>
+        ) : loadErr ? (
+          <div className="p-8 text-center">
+            <p className="text-red-500 text-sm font-medium">{loadErr}</p>
+            <button onClick={load} className="mt-3 text-xs text-indigo-600 hover:underline">Retry</button>
+          </div>
         ) : users.length === 0 ? (
           <div className="p-8 text-center text-slate-400 text-sm">No users yet</div>
         ) : (

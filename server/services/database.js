@@ -62,15 +62,45 @@ export async function uploadOutputFile(jobId, filename, filePath) {
   const { error } = await supabase.storage
     .from(OUTPUT_BUCKET)
     .upload(storagePath, fileBuffer, {
-      contentType: filename.endsWith('.docx')
-        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        : 'application/pdf',
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       upsert: true,
     });
   if (error) throw error;
 
   const { data } = supabase.storage.from(OUTPUT_BUCKET).getPublicUrl(storagePath);
   return data.publicUrl;
+}
+
+// ─── User profile helpers ─────────────────────────────────────────────────────
+
+export async function dbGetUserProfile(userId) {
+  const { data, error } = await supabase
+    .from('user_profiles')
+    .select('pages_used, pages_limit, role')
+    .eq('id', userId)
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function dbIncrementPages(userId, pages) {
+  const { error } = await supabase.rpc('increment_pages_used', {
+    user_id: userId,
+    increment: pages,
+  });
+  // Fallback if RPC not available: fetch then update
+  if (error) {
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('pages_used')
+      .eq('id', userId)
+      .single();
+    const current = profile?.pages_used || 0;
+    await supabase
+      .from('user_profiles')
+      .update({ pages_used: current + pages })
+      .eq('id', userId);
+  }
 }
 
 // ─── Row ↔ Job mappers ───────────────────────────────────────────────────────

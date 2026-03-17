@@ -1,12 +1,40 @@
+import Anthropic from '@anthropic-ai/sdk';
 import translate from 'google-translate-api-x';
 import { applyGlossaryPostProcessing, parseCustomAbbreviations } from './glossary.js';
 
-/**
- * UPSC abbreviations that must NEVER be translated — kept as-is in English.
- * Sorted longest-first to avoid partial match issues.
- */
+// ── Engine selection ──────────────────────────────────────────────────────────
+// Uses Claude (Anthropic) if ANTHROPIC_API_KEY is set, otherwise falls back
+// to the free Google Translate unofficial API.
+const USE_CLAUDE = !!process.env.ANTHROPIC_API_KEY;
+
+let anthropic = null;
+if (USE_CLAUDE) {
+  anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  console.log('  Translation engine: Claude AI (context-aware UPSC/HCS mode)');
+} else {
+  console.log('  Translation engine: Google Translate (EN -> HI Devanagari)');
+  console.log('  Tip: Set ANTHROPIC_API_KEY in .env for smarter UPSC translation');
+}
+
+// ── Claude model — use Haiku for speed/cost, Sonnet for best quality ─────────
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
+
+// ── System prompt for UPSC/HCS context-aware translation ─────────────────────
+const UPSC_SYSTEM_PROMPT = `You are an expert Hindi translator specializing in UPSC and HCS (Haryana Civil Services) examination material.
+
+Your translation rules:
+1. CONTEXT FIRST: Understand how each question/answer is framed before translating. Match the formal, precise language used in civil services exams.
+2. TECHNICAL TERMS: Use standard UPSC Hindi terminology (e.g., "संविधान" not "कॉन्स्टिट्यूशन", "न्यायपालिका" not "जुडिशियरी", "राजकोषीय" not "फिस्कल").
+3. ABBREVIATIONS: Never translate abbreviations like UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, UN, NATO, etc. Keep them exactly as-is in English.
+4. MCQ FORMAT: Preserve MCQ option labels exactly — (a), (b), (c), (d), A), B) — do not translate or remove them.
+5. ANSWER KEYS: Lines like "Answer: A" or "उत्तर: B" must stay intact with the original letter.
+6. NUMBERS & DATES: Keep all numbers, years, percentages, and dates in their original form.
+7. EXAMINATION LANGUAGE: Use formal Sarkari Hindi (formal government Hindi), not colloquial Hindi. The tone should match official UPSC/HCS question papers.
+8. CONCEPTS: If a concept has an established Hindi equivalent used in official government documents (e.g., "Directive Principles" = "राज्य के नीति निर्देशक तत्व"), use that exact term.
+9. OUTPUT: Return ONLY the translated Hindi text. No explanations, no notes, no English words except where rules above apply.`;
+
+// ─── Abbreviation protection (used for Google Translate path) ─────────────────
 const PROTECTED_ABBREVIATIONS = [
-  // Constitutional bodies
   'NHRC', 'NITI', 'SEBI', 'NABARD', 'SIDBI', 'AFSPA', 'PMGSY', 'PMAY',
   'MNREGA', 'NREGA', 'TPDS', 'DRDO', 'BARC', 'CSIR', 'SAARC', 'ASEAN',
   'BRICS', 'NATO', 'UNSC', 'UNGA', 'ISRO', 'CAG', 'CVC', 'CBI', 'CID',
@@ -18,17 +46,12 @@ const PROTECTED_ABBREVIATIONS = [
   'PM', 'CM', 'MP', 'MLA', 'MLC', 'SC', 'ST', 'HC', 'ED',
 ].sort((a, b) => b.length - a.length);
 
-/**
- * Replace all known abbreviations in text with unique placeholders before translation.
- * Returns { protected: string, map: Map<placeholder, abbr> }
- */
 function protectAbbreviations(text, customAbbrs = []) {
   const allAbbrs = [...new Set([...customAbbrs, ...PROTECTED_ABBREVIATIONS])];
   const map = new Map();
   let result = text;
-
   for (const abbr of allAbbrs) {
-    const placeholder = `\u00AB${abbr}\u00BB`; // «ABBR»
+    const placeholder = `\u00AB${abbr}\u00BB`;
     const regex = new RegExp(`\\b${escapeRegex(abbr)}\\b`, 'g');
     if (regex.test(result)) {
       result = result.replace(regex, placeholder);
@@ -38,18 +61,28 @@ function protectAbbreviations(text, customAbbrs = []) {
   return { protected: result, map };
 }
 
-/**
- * Restore abbreviation placeholders after translation.
- */
 function restoreAbbreviations(text, map) {
   let result = text;
   for (const [placeholder, abbr] of map) {
-    // Google Translate may add spaces around or slightly modify the placeholder
-    const escaped = escapeRegex(placeholder);
-    result = result.replace(new RegExp(escaped, 'g'), abbr);
-    // Also handle if translator added spaces inside « »
+    result = result.replace(new RegExp(escapeRegex(placeholder), 'g'), abbr);
     result = result.replace(new RegExp(`«\\s*${escapeRegex(abbr)}\\s*»`, 'gi'), abbr);
   }
+  return result;
+}
+
+function protectMCQPatterns(text, map) {
+  let result = text;
+  let idx = map.size;
+  result = result.replace(
+    /((?:उत्तर|Answer|Ans)[\s]*[:।]\s*)([A-Ea-e])\b/gi,
+    (match) => { const ph = `«MCQ${idx++}»`; map.set(ph, match); return ph; }
+  );
+  result = result.replace(/\(([a-eA-E])\)/g, (match) => {
+    const ph = `«MCQ${idx++}»`; map.set(ph, match); return ph;
+  });
+  result = result.replace(/(?<![a-zA-Z])([a-eA-E])\)(?=\s|$)/gm, (match) => {
+    const ph = `«MCQ${idx++}»`; map.set(ph, match); return ph;
+  });
   return result;
 }
 
@@ -57,90 +90,85 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * Decode HTML entities that Google Translate sometimes returns in output.
- * e.g. &quot; → "   &amp; → &   &#39; → '
- */
 function decodeHtmlEntities(str) {
   return str
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')   // must be last to avoid double-decoding
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
     .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
 }
 
+// ── Claude translation ────────────────────────────────────────────────────────
 /**
- * Protect MCQ option patterns so A/B/C/D answer choices stay in English.
- * Handles: (a) (b) (A) (B)  |  a) b)  |  उत्तर: A  |  Answer: B
+ * Translate a batch of paragraphs using Claude.
+ * Sends them as a numbered list so Claude returns them in the same order.
  */
-function protectMCQPatterns(text, map) {
-  let result = text;
-  let idx = map.size;
+async function translateWithClaude(paragraphs) {
+  if (paragraphs.length === 0) return [];
 
-  // Protect answer key lines: "उत्तर: A" / "Answer: B" / "Ans: C"
-  result = result.replace(
-    /((?:उत्तर|Answer|Ans)[\s]*[:।]\s*)([A-Ea-e])\b/gi,
-    (match, prefix, letter) => {
-      const ph = `«MCQ${idx++}»`;
-      map.set(ph, match);
-      return ph;
+  // Number each paragraph so we can split the output reliably
+  const numbered = paragraphs
+    .map((p, i) => `[${i + 1}] ${p}`)
+    .join('\n\n');
+
+  const userMsg = `Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output.\n\n${numbered}`;
+
+  const response = await anthropic.messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: 4096,
+    system: UPSC_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: userMsg }],
+  });
+
+  const rawOutput = response.content[0]?.text || '';
+
+  // Split on [1], [2], [3]... markers
+  const parts = rawOutput.split(/\n*\[(\d+)\]\s*/);
+  // parts[0] = '' (before first marker), then alternating index / text
+  const result = Array(paragraphs.length).fill('');
+  for (let i = 1; i < parts.length - 1; i += 2) {
+    const idx = parseInt(parts[i], 10) - 1;
+    if (idx >= 0 && idx < paragraphs.length) {
+      result[idx] = parts[i + 1].trim();
     }
-  );
+  }
 
-  // Protect bracketed options: (a) (b) (A) (B) (c) (d) (e)
-  result = result.replace(/\(([a-eA-E])\)/g, (match) => {
-    const ph = `«MCQ${idx++}»`;
-    map.set(ph, match);
-    return ph;
-  });
+  // Fallback: if Claude didn't number properly, return as-is split by double newline
+  const hasEmpty = result.some((r, i) => !r && paragraphs[i].trim());
+  if (hasEmpty && paragraphs.length === 1) {
+    return [rawOutput.trim()];
+  }
 
-  // Protect "a)" "b)" style at line start or after whitespace (not inside words)
-  result = result.replace(/(?<![a-zA-Z])([a-eA-E])\)(?=\s|$)/gm, (match) => {
-    const ph = `«MCQ${idx++}»`;
-    map.set(ph, match);
-    return ph;
-  });
-
-  return result;
+  return result.map((t, i) => t || paragraphs[i]); // keep original if Claude missed it
 }
 
-/**
- * Translate a single chunk with abbreviation protection.
- */
+// ── Google Translate path ─────────────────────────────────────────────────────
 async function translateChunkRaw(text, customAbbrs = []) {
   if (!text.trim()) return text;
-
-  // Build a shared placeholder map for both MCQ and abbreviation protection
   const { protected: abbProtected, map } = protectAbbreviations(text, customAbbrs);
   const mcqProtected = protectMCQPatterns(abbProtected, map);
-
   const result = await translate(mcqProtected, { from: 'en', to: 'hi' });
-  let translated = result.text?.trim() || '';
-
-  // Decode any HTML entities Google Translate injected (e.g. &quot; → ")
-  translated = decodeHtmlEntities(translated);
-
-  // Restore abbreviations and MCQ placeholders
+  let translated = decodeHtmlEntities(result.text?.trim() || '');
   translated = restoreAbbreviations(translated, map);
-
-  // Strip spurious surrounding quotes Google Translate sometimes adds
   const origTrimmed = text.trim();
   if (!origTrimmed.startsWith('"') && !origTrimmed.startsWith('\u201c')) {
     translated = translated.replace(/^[""\u201c\u201d]+|[""\u201c\u201d]+$/g, '').trim();
   }
-
   return translated;
 }
 
+// ── Public API ────────────────────────────────────────────────────────────────
 /**
- * Translate a single chunk of text from English to Hindi.
+ * Translate a single text chunk (used by translateAllChunks path).
  */
 export async function translateChunk(text, chunkIndex, totalChunks, onProgress, customAbbrs = []) {
   try {
-    let translatedText = await translateChunkRaw(text, customAbbrs);
+    let translatedText;
+    if (USE_CLAUDE) {
+      const results = await translateWithClaude([text]);
+      translatedText = results[0] || text;
+    } else {
+      translatedText = await translateChunkRaw(text, customAbbrs);
+    }
     translatedText = applyGlossaryPostProcessing(translatedText, text);
 
     if (onProgress) {
@@ -175,12 +203,11 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
         message: `Translating chunk ${i + 1} of ${chunks.length}...`,
       });
     }
-
     const result = await translateChunk(chunks[i], i, chunks.length, onProgress, customAbbrs);
     translated.push(result);
 
     if (i < chunks.length - 1) {
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, USE_CLAUDE ? 200 : 500));
     }
   }
 
@@ -189,16 +216,72 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
 
 /**
  * Translate an array of paragraphs preserving 1-to-1 order.
- * Used for DOCX clone-and-replace so each translated paragraph
- * maps exactly to its original XML paragraph.
- *
- * Batches paragraphs together with a separator for efficiency,
- * falls back to individual translation if batch splitting fails.
+ * Used for DOCX clone-and-replace.
  */
 export async function translateParagraphs(paragraphs, bookContext = '', onProgress) {
+  const customAbbrs = parseCustomAbbreviations(bookContext);
+
+  if (USE_CLAUDE) {
+    return translateParagraphsWithClaude(paragraphs, onProgress);
+  }
+  return translateParagraphsWithGoogle(paragraphs, customAbbrs, onProgress);
+}
+
+// ── Claude paragraph translation (batched) ────────────────────────────────────
+async function translateParagraphsWithClaude(paragraphs, onProgress) {
+  const BATCH_SIZE = 20; // Claude can handle larger batches
+  const translated = [];
+  const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
+
+  for (let b = 0; b < totalBatches; b++) {
+    const start = b * BATCH_SIZE;
+    const batch = paragraphs.slice(start, start + BATCH_SIZE);
+
+    if (onProgress) {
+      onProgress({
+        chunk: b + 1,
+        totalChunks: totalBatches,
+        percent: Math.round((b / totalBatches) * 100),
+        status: 'translating',
+        message: `Translating paragraphs ${start + 1}–${Math.min(start + BATCH_SIZE, paragraphs.length)} of ${paragraphs.length}...`,
+      });
+    }
+
+    try {
+      // Filter empty paragraphs — translate non-empty ones only
+      const nonEmptyIndices = [];
+      const nonEmptyTexts = [];
+      batch.forEach((p, i) => {
+        if (p.trim()) { nonEmptyIndices.push(i); nonEmptyTexts.push(p); }
+      });
+
+      const batchResult = Array(batch.length).fill('');
+      if (nonEmptyTexts.length > 0) {
+        const results = await translateWithClaude(nonEmptyTexts);
+        nonEmptyIndices.forEach((origIdx, ri) => {
+          let t = results[ri] || batch[origIdx];
+          t = applyGlossaryPostProcessing(t, batch[origIdx]);
+          batchResult[origIdx] = t;
+        });
+      }
+      translated.push(...batchResult);
+    } catch (err) {
+      console.warn(`Claude batch ${b + 1} failed: ${err.message}. Keeping originals.`);
+      translated.push(...batch); // keep original on failure
+    }
+
+    if (b < totalBatches - 1) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  return translated;
+}
+
+// ── Google Translate paragraph translation (batched) ─────────────────────────
+async function translateParagraphsWithGoogle(paragraphs, customAbbrs, onProgress) {
   const BATCH_SIZE = 10;
   const SEPARATOR = '\n[PARA_SEP]\n';
-  const customAbbrs = parseCustomAbbreviations(bookContext);
   const translated = [];
   const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
 
@@ -237,8 +320,8 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
           translated.push(t);
         }
       } else {
-        // Separator got mangled — fall back to individual
-        console.warn(`Batch ${b + 1}: split mismatch (got ${parts.length}, expected ${batch.length}). Translating individually.`);
+        // Separator mangled — translate individually
+        console.warn(`Batch ${b + 1}: split mismatch. Translating individually.`);
         for (const para of batch) {
           try {
             const { protected: abbPara, map: pMap } = protectAbbreviations(para, customAbbrs);
@@ -247,9 +330,7 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
             let t = restoreAbbreviations(decodeHtmlEntities((r.text || '').trim()), pMap);
             t = applyGlossaryPostProcessing(t, para);
             translated.push(t);
-          } catch {
-            translated.push(para);
-          }
+          } catch { translated.push(para); }
           await new Promise((r) => setTimeout(r, 200));
         }
       }
@@ -263,9 +344,7 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
           let t = restoreAbbreviations(decodeHtmlEntities((r.text || '').trim()), pMap);
           t = applyGlossaryPostProcessing(t, para);
           translated.push(t);
-        } catch {
-          translated.push(para);
-        }
+        } catch { translated.push(para); }
         await new Promise((r) => setTimeout(r, 200));
       }
     }

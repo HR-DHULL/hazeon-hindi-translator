@@ -9,8 +9,49 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
+// ── Direct REST helper (bypasses broken JS client DB queries) ─────────────────
+function restHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'apikey': process.env.SUPABASE_SERVICE_KEY,
+    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+    'Prefer': 'return=representation',
+  };
+}
+
+async function restGet(path) {
+  const r = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
+    headers: restHeaders(),
+  });
+  return r.json();
+}
+
+async function restPost(path, body) {
+  const r = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'POST',
+    headers: restHeaders(),
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+async function restPatch(path, body) {
+  const r = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'PATCH',
+    headers: { ...restHeaders(), 'Prefer': 'return=representation' },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+async function restDelete(path) {
+  await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'DELETE',
+    headers: restHeaders(),
+  });
+}
+
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
-// Public: exchange email+password for a session token
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -22,12 +63,18 @@ router.post('/login', async (req, res) => {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 
-  // Fetch profile
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select('*')
-    .eq('id', data.user.id)
-    .single();
+  // Use REST API directly — JS client DB queries fail silently
+  let profile = null;
+  try {
+    const profiles = await restGet(
+      `user_profiles?id=eq.${data.user.id}&select=full_name,role,plan,pages_used,pages_limit`
+    );
+    profile = Array.isArray(profiles) ? profiles[0] : null;
+  } catch (e) {
+    console.warn('Profile REST fetch failed:', e.message);
+  }
+
+  const appMeta = data.user.app_metadata || {};
 
   res.json({
     token: data.session.access_token,
@@ -35,27 +82,30 @@ router.post('/login', async (req, res) => {
       id: data.user.id,
       email: data.user.email,
       fullName: profile?.full_name || '',
-      role: profile?.role || 'user',
-      plan: profile?.plan || 'free',
-      pagesUsed: profile?.pages_used || 0,
-      pagesLimit: profile?.pages_limit || 500,
+      role:       profile?.role       ?? appMeta.role       ?? 'user',
+      plan:       profile?.plan       ?? appMeta.plan       ?? 'free',
+      pagesUsed:  profile?.pages_used ?? 0,
+      pagesLimit: profile?.pages_limit ?? appMeta.pages_limit ?? 500,
     },
   });
 });
 
 // ─── GET /api/auth/me ─────────────────────────────────────────────────────────
-// Get current user info
 router.get('/me', requireAuth, async (req, res) => {
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select('*')
-    .eq('id', req.user.id)
-    .single();
+  let profile = null;
+  try {
+    const profiles = await restGet(
+      `user_profiles?id=eq.${req.user.id}&select=*`
+    );
+    profile = Array.isArray(profiles) ? profiles[0] : null;
+  } catch (e) {
+    console.warn('Profile REST fetch failed:', e.message);
+  }
 
   res.json({
     id: req.user.id,
     email: req.user.email,
-    fullName: profile?.full_name || '',
+    fullName: profile?.full_name || req.user.fullName || '',
     role: req.user.role,
     plan: req.user.plan,
     pagesUsed: req.user.pagesUsed,
@@ -70,13 +120,19 @@ router.post('/logout', requireAuth, async (req, res) => {
 
 // ─── Admin: list all users ────────────────────────────────────────────────────
 router.get('/users', requireAuth, requireAdmin, async (req, res) => {
-  const { data, error } = await supabase
-    .from('user_profiles')
-    .select('*')
-    .order('created_at', { ascending: false });
-
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  try {
+    const data = await restGet(
+      'user_profiles?select=*&order=created_at.desc'
+    );
+    if (!Array.isArray(data)) {
+      console.error('user_profiles REST returned non-array:', data);
+      return res.status(500).json({ error: 'Failed to fetch users' });
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('Error fetching users:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── Admin: create a new user ─────────────────────────────────────────────────
@@ -95,17 +151,21 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
 
   if (error) return res.status(400).json({ error: error.message });
 
-  // Create profile
-  const { error: profileErr } = await supabase.from('user_profiles').insert({
-    id: data.user.id,
-    email,
-    full_name: fullName || '',
-    role,
-    plan,
-    pages_limit: pagesLimit,
-  });
-
-  if (profileErr) return res.status(500).json({ error: profileErr.message });
+  // Create profile via REST API
+  try {
+    await restPost('user_profiles', {
+      id: data.user.id,
+      email,
+      full_name: fullName || '',
+      role,
+      plan,
+      pages_limit: pagesLimit,
+      pages_used: 0,
+    });
+  } catch (profileErr) {
+    console.error('Profile creation failed:', profileErr);
+    return res.status(500).json({ error: 'User created but profile setup failed' });
+  }
 
   res.json({ message: 'User created', userId: data.user.id });
 });
@@ -121,11 +181,11 @@ router.patch('/users/:id', requireAuth, requireAdmin, async (req, res) => {
   if (pagesLimit !== undefined) profileUpdates.pages_limit = pagesLimit;
 
   if (Object.keys(profileUpdates).length > 0) {
-    const { error } = await supabase
-      .from('user_profiles')
-      .update(profileUpdates)
-      .eq('id', req.params.id);
-    if (error) return res.status(500).json({ error: error.message });
+    try {
+      await restPatch(`user_profiles?id=eq.${req.params.id}`, profileUpdates);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
   }
 
   // Ban/unban user in Auth
@@ -140,27 +200,32 @@ router.patch('/users/:id', requireAuth, requireAdmin, async (req, res) => {
 
 // ─── Admin: delete user ───────────────────────────────────────────────────────
 router.delete('/users/:id', requireAuth, requireAdmin, async (req, res) => {
-  await supabase.from('user_profiles').delete().eq('id', req.params.id);
+  await restDelete(`user_profiles?id=eq.${req.params.id}`);
   await supabase.auth.admin.deleteUser(req.params.id);
   res.json({ message: 'User deleted' });
 });
 
 // ─── Admin: usage stats ───────────────────────────────────────────────────────
 router.get('/stats', requireAuth, requireAdmin, async (req, res) => {
-  const { data: users } = await supabase.from('user_profiles').select('*');
-  const { data: jobs } = await supabase
-    .from('jobs')
-    .select('status, user_id, created_at')
-    .order('created_at', { ascending: false })
-    .limit(200);
+  try {
+    const users = await restGet('user_profiles?select=*');
 
-  res.json({
-    totalUsers: users?.length || 0,
-    totalJobs: jobs?.length || 0,
-    completedJobs: jobs?.filter(j => j.status === 'completed').length || 0,
-    failedJobs: jobs?.filter(j => j.status === 'failed').length || 0,
-    users: users || [],
-  });
+    const { data: jobs } = await supabase
+      .from('jobs')
+      .select('status, user_id, created_at')
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    res.json({
+      totalUsers: Array.isArray(users) ? users.length : 0,
+      totalJobs: jobs?.length || 0,
+      completedJobs: jobs?.filter(j => j.status === 'completed').length || 0,
+      failedJobs: jobs?.filter(j => j.status === 'failed').length || 0,
+      users: Array.isArray(users) ? users : [],
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;

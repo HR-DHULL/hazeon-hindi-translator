@@ -1,140 +1,228 @@
-import React from 'react';
-import { Download, CheckCircle, XCircle, FileText, Loader } from 'lucide-react';
+import React, { useState } from 'react';
+import { Download, CheckCircle, XCircle, FileText, Loader, Plus, History, Mail, Send } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+
+const STAGES = [
+  { label: 'Document Parsing',  threshold: 10  },
+  { label: 'Text Chunking',     threshold: 15  },
+  { label: 'AI Translation',    threshold: 85  },
+  { label: 'DOCX Generation',   threshold: 90  },
+  { label: 'PDF Generation',    threshold: 95  },
+  { label: 'Complete',          threshold: 100 },
+];
 
 function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
-  const isComplete = job.status === 'completed';
-  const isFailed = job.status === 'failed';
+  const { authFetch } = useAuth();
+  const isComplete   = job.status === 'completed';
+  const isFailed     = job.status === 'failed';
   const isProcessing = job.status === 'processing';
+  const progress     = job.progress || 0;
 
-  const handleDownload = (format) => {
-    const file = job.outputFiles?.find((f) => f.format === format);
-    // Use Supabase Storage URL if available, fallback to API route
-    const url = file?.url || `/api/translate/download/${job.id}/${format}`;
+  const [shareEmail, setShareEmail] = useState('');
+  const [sharing, setSharing]       = useState(false);
+  const [shareMsg, setShareMsg]     = useState('');
+  const [shareErr, setShareErr]     = useState('');
+
+  const handleDownload = () => {
+    const file = job.outputFiles?.find((f) => f.format === 'docx');
+    const url  = file?.url || `/api/translate/download/${job.id}`;
     window.open(url, '_blank');
   };
 
-  const getStageStatus = (stageThreshold) => {
-    if (job.progress >= stageThreshold) return 'completed';
-    if (job.progress >= stageThreshold - 15) return 'active';
+  const handleShare = async (e) => {
+    e.preventDefault();
+    if (!shareEmail) return;
+    setSharing(true); setShareMsg(''); setShareErr('');
+    try {
+      const r = await authFetch(`/api/translate/share/${job.id}`, {
+        method: 'POST',
+        body: JSON.stringify({ toEmail: shareEmail }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setShareErr(d.error || 'Failed to send'); return; }
+      setShareMsg(`Sent to ${shareEmail}`);
+      setShareEmail('');
+    } catch {
+      setShareErr('Network error. Try again.');
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const getStageStatus = (threshold) => {
+    if (progress >= threshold) return 'done';
+    if (progress >= threshold - 15) return 'active';
     return 'pending';
   };
 
-  const stages = [
-    { label: 'Document Parsing', threshold: 10 },
-    { label: 'Text Chunking', threshold: 15 },
-    { label: 'AI Translation', threshold: 85 },
-    { label: 'DOCX Generation', threshold: 90 },
-    { label: 'PDF Generation', threshold: 95 },
-    { label: 'Complete', threshold: 100 },
-  ];
-
   return (
-    <div className="progress-container">
-      <div className="progress-card">
-        <div className="progress-file-info">
-          <FileText size={20} />
-          <span>{job.originalName}</span>
-        </div>
+    <div className="max-w-xl mx-auto">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
 
-        <div className={`status-badge ${job.status}`}>
-          {isComplete && <CheckCircle size={20} />}
-          {isFailed && <XCircle size={20} />}
-          {isProcessing && <Loader size={20} className="spin" />}
-          <span>
-            {isComplete && 'Translation Complete'}
-            {isFailed && 'Translation Failed'}
-            {isProcessing && 'Translating...'}
-          </span>
-        </div>
-
-        <div className="progress-bar-container">
-          <div className="progress-bar">
-            <div
-              className={`progress-fill ${isComplete ? 'complete' : ''} ${isFailed ? 'failed' : ''}`}
-              style={{ width: `${job.progress || 0}%` }}
-            />
+        {/* File header */}
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100">
+          <div className="w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center shrink-0">
+            <FileText size={18} className="text-slate-500" />
           </div>
-          <span className="progress-percent">{job.progress || 0}%</span>
+          <p className="text-sm font-semibold text-slate-800 truncate flex-1">{job.originalName}</p>
+
+          {/* Status badge */}
+          {isComplete  && <span className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-100 px-2.5 py-1 rounded-full"><CheckCircle size={13} />Complete</span>}
+          {isFailed    && <span className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-100 px-2.5 py-1 rounded-full"><XCircle size={13} />Failed</span>}
+          {isProcessing && <span className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2.5 py-1 rounded-full"><Loader size={13} className="animate-spin" />Translating</span>}
         </div>
 
-        <p className="progress-message">{job.message}</p>
+        <div className="px-5 py-5 space-y-5">
 
-        {job.currentChunk && job.totalChunks && (
-          <div className="chunk-progress">
-            <span>
-              Chunk {job.currentChunk} of {job.totalChunks}
-            </span>
-            <div className="chunk-dots">
-              {Array.from({ length: job.totalChunks }, (_, i) => (
-                <div
-                  key={i}
-                  className={`chunk-dot ${i < job.currentChunk ? 'done' : ''} ${i === job.currentChunk - 1 ? 'active' : ''}`}
-                />
-              ))}
+          {/* Progress bar */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-medium text-slate-600">{job.message || 'Processing...'}</p>
+              <span className={`text-xs font-bold ${isComplete ? 'text-green-600' : isFailed ? 'text-red-500' : 'text-indigo-600'}`}>
+                {progress}%
+              </span>
+            </div>
+            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-700 ease-out ${
+                  isComplete ? 'bg-green-500' : isFailed ? 'bg-red-400' : 'bg-indigo-500'
+                }`}
+                style={{ width: `${progress}%` }}
+              />
             </div>
           </div>
-        )}
 
-        <div className="stages">
-          {stages.map((stage, i) => {
-            const status = getStageStatus(stage.threshold);
-            return (
-              <div key={i} className={`stage ${status}`}>
-                <div className="stage-indicator">
-                  {status === 'completed' ? (
-                    <CheckCircle size={16} />
-                  ) : status === 'active' ? (
-                    <Loader size={16} className="spin" />
-                  ) : (
-                    <div className="stage-dot" />
+          {/* Chunk progress (when chunking) */}
+          {job.currentChunk && job.totalChunks && (
+            <div className="bg-slate-50 rounded-xl px-4 py-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-slate-500">Translating chunks</span>
+                <span className="text-xs font-semibold text-slate-700">{job.currentChunk} / {job.totalChunks}</span>
+              </div>
+              {job.totalChunks <= 30 && (
+                <div className="flex gap-1 flex-wrap">
+                  {Array.from({ length: job.totalChunks }, (_, i) => (
+                    <div
+                      key={i}
+                      className={`h-1.5 flex-1 min-w-[8px] rounded-full transition-all duration-300 ${
+                        i < job.currentChunk - 1
+                          ? 'bg-indigo-500'
+                          : i === job.currentChunk - 1
+                          ? 'bg-indigo-300 animate-pulse'
+                          : 'bg-slate-200'
+                      }`}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Stage tracker */}
+          <div className="space-y-2">
+            {STAGES.map((stage, i) => {
+              const status = getStageStatus(stage.threshold);
+              return (
+                <div key={i} className="flex items-center gap-3">
+                  <div className="shrink-0">
+                    {status === 'done'   && <CheckCircle size={15} className="text-green-500" />}
+                    {status === 'active' && <Loader      size={15} className="text-indigo-500 animate-spin" />}
+                    {status === 'pending' && <div className="w-[15px] h-[15px] rounded-full border-2 border-slate-200" />}
+                  </div>
+                  <span className={`text-xs ${
+                    status === 'done'   ? 'text-slate-600'
+                    : status === 'active' ? 'text-indigo-700 font-semibold'
+                    : 'text-slate-400'
+                  }`}>
+                    {stage.label}
+                  </span>
+                  {i < STAGES.length - 1 && (
+                    <div className={`flex-1 h-px ${status === 'done' ? 'bg-green-200' : 'bg-slate-100'}`} />
                   )}
                 </div>
-                <div className="stage-label">
-                  <span>{stage.label}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
 
-        {isComplete && (
-          <div className="download-section">
-            <h3>Download Translated Files (Devanagari Hindi)</h3>
-            <div className="download-buttons">
-              <button className="download-btn docx" onClick={() => handleDownload('docx')}>
-                <Download size={18} />
-                <div>
-                  <span className="download-format">DOCX</span>
-                  <span className="download-label">Word Document</span>
+          {/* Download + share section */}
+          {isComplete && (
+            <div className="space-y-3">
+              {/* Download DOCX */}
+              <div className="bg-green-50 border border-green-100 rounded-xl px-4 py-4">
+                <p className="text-xs font-semibold text-green-800 mb-3">Translation complete</p>
+                <button
+                  onClick={handleDownload}
+                  className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold py-3 rounded-xl transition shadow-sm shadow-indigo-200"
+                >
+                  <Download size={16} />
+                  Download Hindi DOCX
+                </button>
+              </div>
+
+              {/* Email share */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Mail size={14} className="text-slate-500" />
+                  <p className="text-xs font-semibold text-slate-700">Share via Email</p>
                 </div>
-              </button>
-              <button className="download-btn pdf" onClick={() => handleDownload('pdf')}>
-                <Download size={18} />
-                <div>
-                  <span className="download-format">PDF</span>
-                  <span className="download-label">PDF Document</span>
-                </div>
+                <form onSubmit={handleShare} className="flex gap-2">
+                  <input
+                    type="email"
+                    value={shareEmail}
+                    onChange={(e) => setShareEmail(e.target.value)}
+                    placeholder="recipient@example.com"
+                    required
+                    className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  <button
+                    type="submit"
+                    disabled={sharing || !shareEmail}
+                    className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-semibold px-3 py-2 rounded-xl transition shrink-0"
+                  >
+                    {sharing
+                      ? <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                      : <Send size={13} />
+                    }
+                    Send
+                  </button>
+                </form>
+                {shareMsg && <p className="text-xs text-green-600 font-medium mt-2">✓ {shareMsg}</p>}
+                {shareErr && <p className="text-xs text-red-500 mt-2">{shareErr}</p>}
+              </div>
+            </div>
+          )}
+
+          {/* Error section */}
+          {isFailed && (
+            <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-4 space-y-3">
+              <p className="text-sm font-semibold text-red-800">Translation failed</p>
+              {job.message && <p className="text-xs text-red-600">{job.message}</p>}
+              <button
+                onClick={onNewTranslation}
+                className="text-xs font-semibold text-white bg-red-500 hover:bg-red-600 px-4 py-2 rounded-lg transition"
+              >
+                Try Again
               </button>
             </div>
-          </div>
-        )}
+          )}
 
-        {isFailed && (
-          <div className="error-details">
-            <p>{job.message}</p>
-            <button className="retry-btn" onClick={onNewTranslation}>
-              Try Again
+          {/* Action buttons */}
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={onNewTranslation}
+              className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 py-2.5 rounded-xl transition"
+            >
+              <Plus size={13} />
+              New Translation
+            </button>
+            <button
+              onClick={onViewDashboard}
+              className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 py-2.5 rounded-xl transition"
+            >
+              <History size={13} />
+              View History
             </button>
           </div>
-        )}
-
-        <div className="progress-actions">
-          <button className="secondary-btn" onClick={onNewTranslation}>
-            New Translation
-          </button>
-          <button className="secondary-btn" onClick={onViewDashboard}>
-            View Dashboard
-          </button>
         </div>
       </div>
     </div>
