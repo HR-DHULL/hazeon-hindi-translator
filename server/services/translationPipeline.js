@@ -9,6 +9,7 @@ import { translateParagraphs } from './translator.js';
 import { cloneAndTranslateDOCX } from './docxProcessor.js';
 import {
   dbUpdateJob,
+  dbGetJob,
   dbGetUserProfile,
   dbIncrementPages,
   uploadOutputFile,
@@ -64,6 +65,14 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
         currentChunk: progress.chunk,
         totalChunks: progress.totalChunks,
       });
+      // Check if user cancelled the job
+      try {
+        const current = await dbGetJob(jobId);
+        if (current?.status === 'cancelled') throw new Error('CANCELLED');
+      } catch (e) {
+        if (e.message === 'CANCELLED') throw e;
+        // ignore transient DB read errors
+      }
     });
 
     await emit({ progress: 85, message: 'Translation complete. Generating DOCX...' });
@@ -107,6 +116,11 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     }, 120_000);
 
   } catch (error) {
+    if (error.message === 'CANCELLED') {
+      // Job already marked cancelled in DB — just clean up temp files
+      try { fs.unlinkSync(filePath); } catch {}
+      return;
+    }
     await emit({ status: 'failed', message: `Translation failed: ${error.message}` });
     throw error;
   }

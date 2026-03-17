@@ -238,7 +238,7 @@ async function translateParagraphsWithClaude(paragraphs, onProgress) {
     const batch = paragraphs.slice(start, start + BATCH_SIZE);
 
     if (onProgress) {
-      onProgress({
+      await onProgress({
         chunk: b + 1,
         totalChunks: totalBatches,
         percent: Math.round((b / totalBatches) * 100),
@@ -290,7 +290,7 @@ async function translateParagraphsWithGoogle(paragraphs, customAbbrs, onProgress
     const batch = paragraphs.slice(start, start + BATCH_SIZE);
 
     if (onProgress) {
-      onProgress({
+      await onProgress({
         chunk: b + 1,
         totalChunks: totalBatches,
         percent: Math.round((b / totalBatches) * 100),

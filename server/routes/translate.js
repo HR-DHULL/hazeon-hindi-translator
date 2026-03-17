@@ -135,6 +135,27 @@ router.post('/upload', requireAuth, (req, res, next) => {
   }
 });
 
+// ─── POST /api/translate/cancel/:jobId ───────────────────────────────────────
+router.post('/cancel/:jobId', requireAuth, async (req, res) => {
+  try {
+    const job = await dbGetJob(req.params.jobId);
+    if (job.userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    if (job.status !== 'processing') {
+      return res.status(400).json({ error: 'Job is not currently processing' });
+    }
+    await dbUpdateJob(req.params.jobId, {
+      status: 'cancelled',
+      message: 'Translation cancelled by user.',
+      progress: job.progress || 0,
+    });
+    res.json({ message: 'Translation cancelled' });
+  } catch {
+    res.status(404).json({ error: 'Job not found' });
+  }
+});
+
 // ─── GET /api/translate/status/:jobId ────────────────────────────────────────
 router.get('/status/:jobId', requireAuth, async (req, res) => {
   try {

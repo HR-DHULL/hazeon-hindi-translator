@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, CheckCircle, XCircle, FileText, Loader, Plus, History, Mail, Send } from 'lucide-react';
+import { Download, CheckCircle, XCircle, FileText, Loader, Plus, History, Mail, Send, StopCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const STAGES = [
@@ -18,10 +18,30 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
   const isProcessing = job.status === 'processing';
   const progress     = job.progress || 0;
 
-  const [shareEmail, setShareEmail] = useState('');
-  const [sharing, setSharing]       = useState(false);
-  const [shareMsg, setShareMsg]     = useState('');
-  const [shareErr, setShareErr]     = useState('');
+  const isCancelled  = job.status === 'cancelled';
+
+  const [shareEmail, setShareEmail]   = useState('');
+  const [sharing, setSharing]         = useState(false);
+  const [shareMsg, setShareMsg]       = useState('');
+  const [shareErr, setShareErr]       = useState('');
+  const [cancelling, setCancelling]   = useState(false);
+  const [cancelErr, setCancelErr]     = useState('');
+
+  const handleCancel = async () => {
+    if (!confirm('Stop this translation? Progress so far will be lost.')) return;
+    setCancelling(true); setCancelErr('');
+    try {
+      const r = await authFetch(`/api/translate/cancel/${job.id}`, { method: 'POST' });
+      if (!r.ok) {
+        const d = await r.json();
+        setCancelErr(d.error || 'Could not cancel');
+      }
+    } catch {
+      setCancelErr('Network error. Try again.');
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   const handleDownload = () => {
     const file = job.outputFiles?.find((f) => f.format === 'docx');
@@ -67,9 +87,23 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
           <p className="text-sm font-semibold text-slate-800 truncate flex-1">{job.originalName}</p>
 
           {/* Status badge */}
-          {isComplete  && <span className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-100 px-2.5 py-1 rounded-full"><CheckCircle size={13} />Complete</span>}
-          {isFailed    && <span className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-100 px-2.5 py-1 rounded-full"><XCircle size={13} />Failed</span>}
-          {isProcessing && <span className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2.5 py-1 rounded-full"><Loader size={13} className="animate-spin" />Translating</span>}
+          {isComplete   && <span className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-100 px-2.5 py-1 rounded-full"><CheckCircle size={13} />Complete</span>}
+          {isFailed     && <span className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-100 px-2.5 py-1 rounded-full"><XCircle size={13} />Failed</span>}
+          {isCancelled  && <span className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-slate-600 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-full"><StopCircle size={13} />Cancelled</span>}
+          {isProcessing && (
+            <div className="shrink-0 flex items-center gap-2">
+              <span className="flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2.5 py-1 rounded-full"><Loader size={13} className="animate-spin" />Translating</span>
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                title="Cancel translation"
+                className="flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 hover:bg-red-50 border border-red-200 px-2.5 py-1 rounded-full transition disabled:opacity-50"
+              >
+                <StopCircle size={13} />
+                {cancelling ? 'Stopping…' : 'Cancel'}
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="px-5 py-5 space-y-5">
@@ -189,6 +223,26 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
                 {shareMsg && <p className="text-xs text-green-600 font-medium mt-2">✓ {shareMsg}</p>}
                 {shareErr && <p className="text-xs text-red-500 mt-2">{shareErr}</p>}
               </div>
+            </div>
+          )}
+
+          {/* Cancel error */}
+          {cancelErr && (
+            <p className="text-xs text-red-500 bg-red-50 border border-red-100 rounded-xl px-4 py-2">{cancelErr}</p>
+          )}
+
+          {/* Cancelled section */}
+          {isCancelled && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-4 space-y-3">
+              <p className="text-sm font-semibold text-slate-700">Translation cancelled</p>
+              <p className="text-xs text-slate-500">The translation was stopped. No pages were deducted from your limit.</p>
+              <button
+                onClick={onNewTranslation}
+                className="flex items-center gap-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded-lg transition"
+              >
+                <Plus size={13} />
+                Start New Translation
+              </button>
             </div>
           )}
 
