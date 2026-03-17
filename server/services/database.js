@@ -83,23 +83,63 @@ export async function dbGetUserProfile(userId) {
   return data;
 }
 
+/**
+ * Atomically check remaining pages and reserve them to prevent TOCTOU race conditions.
+ * Returns { success: true, remaining } or { success: false, remaining, needed }.
+ */
+export async function dbReservePages(userId, pagesNeeded) {
+  // Try RPC first (atomic DB-level check-and-increment)
+  const { data, error } = await supabase.rpc('reserve_pages_if_available', {
+    p_user_id: userId,
+    p_pages_needed: pagesNeeded,
+  });
+
+  if (!error && data !== null && data !== undefined) {
+    // RPC returned true/false
+    if (data === true || data?.success) {
+      return { success: true };
+    }
+    return { success: false, message: 'Page limit would be exceeded' };
+  }
+
+  // Fallback: fetch-check-update (not fully atomic but better than nothing)
+  console.warn('reserve_pages_if_available RPC not available, using fallback');
+  const profile = await dbGetUserProfile(userId);
+  const remaining = (profile.pages_limit || 500) - (profile.pages_used || 0);
+  if (pagesNeeded > remaining) {
+    return { success: false, remaining, needed: pagesNeeded };
+  }
+  // Optimistic increment — reserve the pages upfront
+  await dbIncrementPages(userId, pagesNeeded);
+  return { success: true, remaining: remaining - pagesNeeded, reserved: true };
+}
+
 export async function dbIncrementPages(userId, pages) {
   const { error } = await supabase.rpc('increment_pages_used', {
     user_id: userId,
     increment: pages,
   });
-  // Fallback if RPC not available: fetch then update
+  // Fallback if RPC function doesn't exist: fetch then update
   if (error) {
-    const { data: profile } = await supabase
+    console.warn('RPC increment_pages_used failed, using fallback:', error.message);
+    const { data: profile, error: fetchErr } = await supabase
       .from('user_profiles')
       .select('pages_used')
       .eq('id', userId)
       .single();
+    if (fetchErr) {
+      console.error('Failed to fetch user profile for page increment:', fetchErr.message);
+      throw fetchErr;
+    }
     const current = profile?.pages_used || 0;
-    await supabase
+    const { error: updateErr } = await supabase
       .from('user_profiles')
       .update({ pages_used: current + pages })
       .eq('id', userId);
+    if (updateErr) {
+      console.error('Failed to update pages_used:', updateErr.message);
+      throw updateErr;
+    }
   }
 }
 

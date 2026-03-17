@@ -226,10 +226,21 @@ router.get('/users', requireAuth, requireAdmin, async (req, res) => {
 
 // ─── Admin: create a new user ─────────────────────────────────────────────────
 router.post('/users', requireAuth, requireAdmin, async (req, res) => {
-  const { email, password, fullName, role = 'user', plan = 'free', pagesLimit = 500 } = req.body;
+  const { email, password, fullName } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }
+  if (!EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: 'Invalid email format' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+
+  // Sanitize role, plan, and pagesLimit to prevent privilege escalation
+  const role = VALID_ROLES.includes(req.body.role) ? req.body.role : 'user';
+  const plan = VALID_PLANS.includes(req.body.plan) ? req.body.plan : 'free';
+  const pagesLimit = Math.max(1, Math.min(99999, parseInt(req.body.pagesLimit) || 500));
 
   // Create in Supabase Auth (include app_metadata so JWT carries role/plan)
   const { data, error } = await supabase.auth.admin.createUser({
@@ -262,7 +273,14 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
 
 // ─── Admin: update user (role, plan, limit, deactivate) ──────────────────────
 router.patch('/users/:id', requireAuth, requireAdmin, async (req, res) => {
-  const { fullName, role, plan, pagesLimit, active } = req.body;
+  if (!isValidUUID(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid user ID' });
+  }
+  const { fullName, active } = req.body;
+  // Sanitize role/plan/pagesLimit
+  const role = req.body.role !== undefined && VALID_ROLES.includes(req.body.role) ? req.body.role : undefined;
+  const plan = req.body.plan !== undefined && VALID_PLANS.includes(req.body.plan) ? req.body.plan : undefined;
+  const pagesLimit = req.body.pagesLimit !== undefined ? Math.max(1, Math.min(99999, parseInt(req.body.pagesLimit) || 500)) : undefined;
 
   const profileUpdates = {};
   if (fullName !== undefined)   profileUpdates.full_name = fullName;
@@ -300,9 +318,17 @@ router.patch('/users/:id', requireAuth, requireAdmin, async (req, res) => {
 
 // ─── Admin: delete user ───────────────────────────────────────────────────────
 router.delete('/users/:id', requireAuth, requireAdmin, async (req, res) => {
-  await restDelete(`user_profiles?id=eq.${req.params.id}`);
-  await supabase.auth.admin.deleteUser(req.params.id);
-  res.json({ message: 'User deleted' });
+  if (!isValidUUID(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid user ID' });
+  }
+  try {
+    await restDelete(`user_profiles?id=eq.${req.params.id}`);
+    await supabase.auth.admin.deleteUser(req.params.id);
+    res.json({ message: 'User deleted' });
+  } catch (err) {
+    console.error('Error deleting user:', err.message);
+    res.status(500).json({ error: 'Failed to delete user' });
+  }
 });
 
 // ─── Admin: usage stats ───────────────────────────────────────────────────────

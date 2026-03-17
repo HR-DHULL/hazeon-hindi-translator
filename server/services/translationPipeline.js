@@ -10,8 +10,7 @@ import { cloneAndTranslateDOCX } from './docxProcessor.js';
 import {
   dbUpdateJob,
   dbGetJob,
-  dbGetUserProfile,
-  dbIncrementPages,
+  dbReservePages,
   uploadOutputFile,
 } from './database.js';
 
@@ -33,19 +32,18 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
       charCount: parsed.text.length,
     });
 
-    // Re-check page limit now that we know actual page count
+    // Atomically reserve pages to prevent TOCTOU race condition
+    // (two simultaneous uploads both passing the initial check)
+    let pagesReserved = false;
     if (userRole !== 'admin' && userId) {
-      try {
-        const profile = await dbGetUserProfile(userId);
-        const remaining = (profile.pages_limit || 500) - (profile.pages_used || 0);
-        if (parsed.pageCount > remaining) {
-          throw new Error(
-            `Page limit would be exceeded. You have ${remaining} page(s) remaining but this document has ${parsed.pageCount} page(s). Contact admin to increase your limit.`
-          );
-        }
-      } catch (limitErr) {
-        if (limitErr.message.includes('Page limit')) throw limitErr;
+      const reservation = await dbReservePages(userId, parsed.pageCount);
+      if (!reservation.success) {
+        const msg = reservation.remaining !== undefined
+          ? `Page limit would be exceeded. You have ${reservation.remaining} page(s) remaining but this document has ${parsed.pageCount} page(s). Contact admin to increase your limit.`
+          : 'Page limit would be exceeded. Contact admin to increase your limit.';
+        throw new Error(msg);
       }
+      pagesReserved = true;
     }
 
     const paragraphs = parsed.paragraphTexts || [];
@@ -102,12 +100,7 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
       completedAt: new Date().toISOString(),
     });
 
-    // Increment pages used
-    if (userRole !== 'admin' && userId && parsed.pageCount) {
-      try { await dbIncrementPages(userId, parsed.pageCount); } catch (e) {
-        console.warn('Failed to increment pages_used:', e.message);
-      }
-    }
+    // Pages already reserved atomically via dbReservePages above — no separate increment needed
 
     // Cleanup local temp files after 2 min
     setTimeout(() => {

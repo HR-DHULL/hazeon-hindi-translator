@@ -31,6 +31,9 @@ export function AuthProvider({ children }) {
     refreshTokenRef.current = null;
   };
 
+  // Mutex to prevent multiple concurrent refresh attempts
+  const refreshPromiseRef = useRef(null);
+
   // Authenticated fetch — automatically adds Bearer token and handles expiry
   const authFetch = useCallback(async (url, options = {}) => {
     const makeRequest = (tkn) => {
@@ -43,29 +46,37 @@ export function AuthProvider({ children }) {
 
     let res = await makeRequest(tokenRef.current);
 
-    // On 401, try to silently refresh the token once
+    // On 401, try to silently refresh the token once (with mutex to prevent race condition)
     if (res.status === 401 && refreshTokenRef.current) {
       try {
-        const refreshRes = await fetch('/api/auth/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken: refreshTokenRef.current }),
-        });
+        // If a refresh is already in flight, wait for it instead of starting another
+        if (!refreshPromiseRef.current) {
+          refreshPromiseRef.current = fetch('/api/auth/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken: refreshTokenRef.current }),
+          }).then(async (refreshRes) => {
+            if (refreshRes.ok) {
+              const data = await refreshRes.json();
+              localStorage.setItem(TOKEN_KEY, data.token);
+              localStorage.setItem(REFRESH_KEY, data.refreshToken);
+              tokenRef.current = data.token;
+              refreshTokenRef.current = data.refreshToken;
+              setToken(data.token);
+              setRefreshToken(data.refreshToken);
+              return data.token;
+            } else {
+              clearAuth();
+              return null;
+            }
+          }).finally(() => {
+            refreshPromiseRef.current = null;
+          });
+        }
 
-        if (refreshRes.ok) {
-          const data = await refreshRes.json();
-          // Persist new tokens
-          localStorage.setItem(TOKEN_KEY, data.token);
-          localStorage.setItem(REFRESH_KEY, data.refreshToken);
-          tokenRef.current = data.token;
-          refreshTokenRef.current = data.refreshToken;
-          setToken(data.token);
-          setRefreshToken(data.refreshToken);
-          // Retry the original request with the new token
-          res = await makeRequest(data.token);
-        } else {
-          // Refresh token itself is expired — force logout
-          clearAuth();
+        const newToken = await refreshPromiseRef.current;
+        if (newToken) {
+          res = await makeRequest(newToken);
         }
       } catch {
         // Network error — don't force-logout, let the original 401 propagate

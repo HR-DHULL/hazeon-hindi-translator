@@ -43,7 +43,8 @@ fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: UPLOAD_DIR,
-  filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`),
+  // Always use .docx extension — ignore original extension to prevent path traversal via crafted filenames
+  filename: (req, file, cb) => cb(null, `${uuidv4()}.docx`),
 });
 
 const upload = multer({
@@ -94,7 +95,8 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
   const jobId = uuidv4();
   const originalName = req.file.originalname;
   const baseName = path.basename(originalName, path.extname(originalName));
-  const bookContext = (req.body.bookContext || '').trim();
+  const MAX_CONTEXT_LENGTH = 2000;
+  const bookContext = (req.body.bookContext || '').trim().slice(0, MAX_CONTEXT_LENGTH);
 
   const job = {
     id: jobId,
@@ -123,14 +125,23 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
       fs.unlink(req.file.path, () => {}); // remove from /tmp
 
       const bgUrl = `${process.env.URL}/.netlify/functions/translate-background`;
-      fetch(bgUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-internal-secret': process.env.INTERNAL_SECRET || 'hazeon-internal-2024',
-        },
-        body: JSON.stringify({ jobId, storageKey, baseName, bookContext, userId: req.user.id, userRole: req.user.role }),
-      }).catch(e => console.error('Failed to trigger background function:', e.message));
+      try {
+        const bgRes = await fetch(bgUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-internal-secret': process.env.INTERNAL_SECRET || '',
+          },
+          body: JSON.stringify({ jobId, storageKey, baseName, bookContext, userId: req.user.id, userRole: req.user.role }),
+        });
+        if (!bgRes.ok) {
+          console.error(`Background function returned ${bgRes.status}`);
+          await dbUpdateJob(jobId, { status: 'failed', message: 'Failed to start background translation.' });
+        }
+      } catch (e) {
+        console.error('Failed to trigger background function:', e.message);
+        try { await dbUpdateJob(jobId, { status: 'failed', message: 'Failed to start translation service.' }); } catch {}
+      }
     } catch (err) {
       console.error('Failed to upload input to storage:', err.message);
       try { await dbUpdateJob(jobId, { status: 'failed', message: 'Failed to stage file for translation.' }); } catch {}
@@ -149,6 +160,7 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
 router.post('/cancel/:jobId', requireAuth, async (req, res) => {
   try {
     const job = await dbGetJob(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
     if (job.userId !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Not authorized' });
     }
