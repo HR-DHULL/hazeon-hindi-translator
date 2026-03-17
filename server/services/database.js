@@ -103,6 +103,36 @@ export async function dbIncrementPages(userId, pages) {
   }
 }
 
+// ─── Supabase Storage: input files (temp, for Netlify background fn) ─────────
+
+const INPUT_BUCKET = 'inputs';
+
+export async function uploadInputFile(jobId, filename, filePath) {
+  const fs = await import('fs');
+  const fileBuffer = fs.readFileSync(filePath);
+  const storagePath = `${jobId}/${filename}`;
+  const { error } = await supabase.storage
+    .from(INPUT_BUCKET)
+    .upload(storagePath, fileBuffer, {
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      upsert: true,
+    });
+  if (error) throw error;
+  return storagePath;
+}
+
+export async function downloadInputFile(storageKey, destPath) {
+  const { data, error } = await supabase.storage.from(INPUT_BUCKET).download(storageKey);
+  if (error) throw error;
+  const fs = await import('fs');
+  const buffer = Buffer.from(await data.arrayBuffer());
+  fs.writeFileSync(destPath, buffer);
+}
+
+export async function deleteInputFile(storageKey) {
+  await supabase.storage.from(INPUT_BUCKET).remove([storageKey]);
+}
+
 // ─── Row ↔ Job mappers ───────────────────────────────────────────────────────
 
 function jobToRow(job) {

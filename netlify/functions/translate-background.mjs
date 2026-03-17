@@ -1,127 +1,63 @@
 /**
- * Netlify Background Function for long-running translation jobs.
- * File name ends with "-background" so Netlify treats it as a background function
- * (up to 15 minutes execution time on Pro plan).
+ * Netlify Background Function — handles long-running translation jobs.
+ * Runs up to 15 minutes (no timeout issues). Called by the upload route
+ * after returning the jobId to the client.
+ *
+ * The filename ends in "-background" which Netlify requires for background functions.
+ * These run asynchronously — the 202 response is returned immediately.
  */
 import 'dotenv/config';
 import fs from 'fs';
-import path from 'path';
-import { parseFile } from '../../server/services/fileParser.js';
-import { translateParagraphs } from '../../server/services/translator.js';
-import { cloneAndTranslateDOCX } from '../../server/services/docxProcessor.js';
-import {
-  dbUpdateJob,
-  uploadOutputFile,
-  downloadTempFile,
-} from '../../server/services/database.js';
+import { v4 as uuidv4 } from 'uuid';
+import { dbUpdateJob, downloadInputFile, deleteInputFile } from '../../server/services/database.js';
+import { processTranslation } from '../../server/services/translationPipeline.js';
 
-export async function handler(event) {
+const OUTPUT_DIR = '/tmp/output';
+const EXPECTED_SECRET = process.env.INTERNAL_SECRET || 'hazeon-internal-2024';
+
+export default async (req) => {
+  // Basic security — only accept calls from our own upload route
+  const incomingSecret = req.headers.get('x-internal-secret');
+  if (incomingSecret !== EXPECTED_SECRET) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
   let body;
   try {
-    body = JSON.parse(event.body);
+    body = await req.json();
   } catch {
-    return { statusCode: 400, body: 'Invalid JSON' };
+    return new Response('Bad request', { status: 400 });
   }
 
-  const { jobId, tempPath, baseName, bookContext } = body;
-  if (!jobId || !tempPath) {
-    return { statusCode: 400, body: 'Missing jobId or tempPath' };
+  const { jobId, storageKey, baseName, bookContext, userId, userRole } = body;
+  if (!jobId || !storageKey) {
+    return new Response('Missing jobId or storageKey', { status: 400 });
   }
 
-  const localPath = path.join('/tmp', `${jobId}_input.docx`);
-  const outputDir = '/tmp';
+  // Must return quickly for Netlify background fn to register correctly.
+  // The async work continues after the return.
+  runTranslation({ jobId, storageKey, baseName, bookContext, userId, userRole });
+
+  return new Response(null, { status: 202 });
+};
+
+async function runTranslation({ jobId, storageKey, baseName, bookContext, userId, userRole }) {
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  const localInputPath = `/tmp/${uuidv4()}.docx`;
 
   try {
-    // Step 1: Download uploaded file from Supabase temp storage
-    const fileBuffer = await downloadTempFile(tempPath);
-    fs.writeFileSync(localPath, fileBuffer);
+    await dbUpdateJob(jobId, { progress: 2, message: 'Loading document...' });
+    await downloadInputFile(storageKey, localInputPath);
 
-    // Step 2: Parse
-    await dbUpdateJob(jobId, { progress: 5, message: 'Parsing document...' });
-    const parsed = await parseFile(localPath);
-    await dbUpdateJob(jobId, {
-      progress: 10,
-      message: `Parsed ${parsed.pageCount} page(s). Preparing for translation...`,
-      pageCount: parsed.pageCount,
-      charCount: parsed.text.length,
-    });
-
-    const paragraphs = parsed.paragraphTexts || [];
-
-    await dbUpdateJob(jobId, {
-      progress: 15,
-      message: `Found ${paragraphs.length} paragraphs. Starting translation...`,
-      totalChunks: paragraphs.length,
-    });
-
-    // Step 3: Translate
-    const translatedParagraphs = await translateParagraphs(
-      paragraphs,
-      bookContext,
-      async (progress) => {
-        const overallPercent = 15 + Math.round((progress.percent / 100) * 70);
-        await dbUpdateJob(jobId, {
-          progress: overallPercent,
-          message: progress.message,
-          currentChunk: progress.chunk,
-          totalChunks: progress.totalChunks,
-        });
-      },
-    );
-
-    await dbUpdateJob(jobId, {
-      progress: 85,
-      message: 'Translation complete. Generating DOCX...',
-    });
-
-    // Step 4: Generate output DOCX
-    const docxFilename = `${baseName}_hindi.docx`;
-    const docxPath = path.join(outputDir, docxFilename);
-    await cloneAndTranslateDOCX(localPath, translatedParagraphs, docxPath);
-
-    await dbUpdateJob(jobId, {
-      progress: 92,
-      message: 'Uploading translated file...',
-    });
-
-    // Step 5: Upload output to Supabase Storage
-    let docxUrl = null;
-    try {
-      docxUrl = await uploadOutputFile(jobId, docxFilename, docxPath);
-    } catch (err) {
-      console.warn('Supabase Storage upload failed:', err.message);
-    }
-
-    const outputFiles = [
-      {
-        format: 'docx',
-        name: docxFilename,
-        url: docxUrl,
-      },
-    ];
-
-    // Step 6: Mark complete
-    await dbUpdateJob(jobId, {
-      status: 'completed',
-      progress: 100,
-      message: 'Translation completed successfully!',
-      outputFiles,
-      completedAt: new Date().toISOString(),
-    });
-
-    // Cleanup temp files
-    try { fs.unlinkSync(localPath); } catch {}
-    try { fs.unlinkSync(docxPath); } catch {}
+    await processTranslation(jobId, localInputPath, baseName, bookContext, userId, userRole, OUTPUT_DIR);
 
   } catch (error) {
-    console.error(`Background job ${jobId} failed:`, error);
+    console.error(`Background job ${jobId} failed:`, error.message);
     try {
-      await dbUpdateJob(jobId, {
-        status: 'failed',
-        message: `Translation failed: ${error.message}`,
-      });
+      await dbUpdateJob(jobId, { status: 'failed', message: `Translation failed: ${error.message}` });
     } catch {}
+  } finally {
+    try { fs.unlinkSync(localInputPath); } catch {}
+    try { await deleteInputFile(storageKey); } catch {}
   }
-
-  return { statusCode: 200 };
 }
