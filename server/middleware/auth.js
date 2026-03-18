@@ -53,7 +53,7 @@ export async function requireAuth(req, res, next) {
       fullName: profile?.full_name || '',
       role:       profile?.role       ?? appMeta.role       ?? 'user',
       plan:       profile?.plan       ?? appMeta.plan       ?? 'free',
-      pagesUsed:  profile?.pages_used ?? 0,
+      pagesUsed:  profile?.pages_used ?? appMeta.pages_used ?? 0,
       pagesLimit: profile?.pages_limit ?? appMeta.pages_limit ?? 500,
     };
 

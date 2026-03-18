@@ -1,10 +1,9 @@
 /**
- * Netlify Background Function — handles long-running translation jobs.
- * Runs up to 15 minutes (no timeout issues). Called by the upload route
- * after returning the jobId to the client.
+ * Netlify Background Function (v1 format) — handles long-running translation jobs.
+ * Runs up to 15 minutes asynchronously. Netlify returns 202 to the caller immediately.
  *
- * The filename ends in "-background" which Netlify requires for background functions.
- * These run asynchronously — the 202 response is returned immediately.
+ * Uses v1 convention: filename ends in "-background" + exports `handler`.
+ * This is more reliable with esbuild bundling than v2 config.type approach.
  */
 import 'dotenv/config';
 import { timingSafeEqual } from 'crypto';
@@ -23,49 +22,53 @@ function secretsMatch(a, b) {
   return timingSafeEqual(bufA, bufB);
 }
 
-export default async (req) => {
-  // Require INTERNAL_SECRET env var — no hardcoded fallback
+// v1 background function handler — receives (event, context)
+export const handler = async (event, context) => {
+  console.log('translate-background invoked');
+
+  // Require INTERNAL_SECRET env var
   const EXPECTED_SECRET = process.env.INTERNAL_SECRET;
   if (!EXPECTED_SECRET) {
-    console.error('INTERNAL_SECRET env var is not set — rejecting background function call');
-    return new Response('Server misconfigured', { status: 500 });
+    console.error('INTERNAL_SECRET env var is not set');
+    return { statusCode: 500, body: 'Server misconfigured' };
   }
 
-  // Timing-safe comparison to prevent timing attacks
-  const incomingSecret = req.headers.get('x-internal-secret');
+  // Timing-safe secret comparison
+  const incomingSecret = event.headers['x-internal-secret'] || '';
   if (!secretsMatch(incomingSecret, EXPECTED_SECRET)) {
-    return new Response('Forbidden', { status: 403 });
+    console.error('Invalid internal secret');
+    return { statusCode: 403, body: 'Forbidden' };
   }
 
   let body;
   try {
-    body = await req.json();
+    body = JSON.parse(event.body || '{}');
   } catch {
-    return new Response('Bad request', { status: 400 });
+    console.error('Failed to parse request body');
+    return { statusCode: 400, body: 'Bad request' };
   }
 
   const { jobId, storageKey, baseName, bookContext, userId, userRole } = body;
   if (!jobId || !storageKey) {
-    return new Response('Missing jobId or storageKey', { status: 400 });
+    console.error('Missing jobId or storageKey');
+    return { statusCode: 400, body: 'Missing jobId or storageKey' };
   }
 
-  // Must return quickly for Netlify background fn to register correctly.
-  // The async work continues after the return.
-  runTranslation({ jobId, storageKey, baseName, bookContext, userId, userRole });
+  console.log(`Starting translation job ${jobId}`);
 
-  return new Response(null, { status: 202 });
-};
-
-async function runTranslation({ jobId, storageKey, baseName, bookContext, userId, userRole }) {
+  // Run the full translation — this can take minutes
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   const localInputPath = `/tmp/${uuidv4()}.docx`;
 
   try {
     await dbUpdateJob(jobId, { progress: 2, message: 'Loading document...' });
+    console.log(`Job ${jobId}: downloading input file...`);
     await downloadInputFile(storageKey, localInputPath);
 
+    console.log(`Job ${jobId}: starting processTranslation...`);
     await processTranslation(jobId, localInputPath, baseName, bookContext, userId, userRole, OUTPUT_DIR);
 
+    console.log(`Job ${jobId}: completed successfully`);
   } catch (error) {
     console.error(`Background job ${jobId} failed:`, error.message);
     try {
@@ -75,4 +78,6 @@ async function runTranslation({ jobId, storageKey, baseName, bookContext, userId
     try { fs.unlinkSync(localInputPath); } catch {}
     try { await deleteInputFile(storageKey); } catch {}
   }
-}
+
+  return { statusCode: 200, body: 'Done' };
+};

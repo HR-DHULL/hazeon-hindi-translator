@@ -30,7 +30,7 @@ export async function dbGetJob(id) {
 
 export async function dbGetAllJobs(userId = null) {
   let query = supabase.from('jobs').select('*').order('created_at', { ascending: false });
-  if (userId) query = query.eq('user_id', userId);
+  // Note: jobs table has no user_id column — show all jobs for now
   const { data, error } = await query;
   if (error) throw error;
   return (data || []).map(rowToJob);
@@ -60,6 +60,14 @@ export async function dbUpdateJob(id, updates) {
   if (error) throw error;
 }
 
+export async function dbDeleteJob(id) {
+  const { error } = await supabase
+    .from('jobs')
+    .delete()
+    .eq('id', id);
+  if (error) throw error;
+}
+
 // ─── Supabase Storage for translated output files ────────────────────────────
 
 const OUTPUT_BUCKET = 'outputs';
@@ -81,75 +89,48 @@ export async function uploadOutputFile(jobId, filename, filePath) {
   return data.publicUrl;
 }
 
-// ─── User profile helpers ─────────────────────────────────────────────────────
+// ─── User profile helpers (uses Supabase Auth app_metadata — no extra table needed) ──
 
 export async function dbGetUserProfile(userId) {
-  const { data, error } = await supabase
-    .from('user_profiles')
-    .select('pages_used, pages_limit, role')
-    .eq('id', userId)
-    .single();
+  const { data, error } = await supabase.auth.admin.getUserById(userId);
   if (error) throw error;
-  return data;
+  const meta = data?.user?.app_metadata || {};
+  return {
+    pages_used: meta.pages_used || 0,
+    pages_limit: meta.pages_limit || 500,
+    role: meta.role || 'user',
+  };
 }
 
 /**
- * Atomically check remaining pages and reserve them to prevent TOCTOU race conditions.
+ * Check remaining pages and reserve them using Supabase Auth app_metadata.
  * Returns { success: true, remaining } or { success: false, remaining, needed }.
  */
 export async function dbReservePages(userId, pagesNeeded) {
-  // Try RPC first (atomic DB-level check-and-increment)
-  const { data, error } = await supabase.rpc('reserve_pages_if_available', {
-    p_user_id: userId,
-    p_pages_needed: pagesNeeded,
-  });
-
-  if (!error && data !== null && data !== undefined) {
-    // RPC returned true/false
-    if (data === true || data?.success) {
-      return { success: true };
-    }
-    return { success: false, message: 'Page limit would be exceeded' };
-  }
-
-  // Fallback: fetch-check-update (not fully atomic but better than nothing)
-  console.warn('reserve_pages_if_available RPC not available, using fallback');
   const profile = await dbGetUserProfile(userId);
   const remaining = (profile.pages_limit || 500) - (profile.pages_used || 0);
   if (pagesNeeded > remaining) {
     return { success: false, remaining, needed: pagesNeeded };
   }
-  // Optimistic increment — reserve the pages upfront
+  // Increment pages_used in app_metadata
   await dbIncrementPages(userId, pagesNeeded);
   return { success: true, remaining: remaining - pagesNeeded, reserved: true };
 }
 
 export async function dbIncrementPages(userId, pages) {
-  const { error } = await supabase.rpc('increment_pages_used', {
-    user_id: userId,
-    increment: pages,
+  // Fetch current pages_used from app_metadata
+  const { data, error: fetchErr } = await supabase.auth.admin.getUserById(userId);
+  if (fetchErr) {
+    console.error('Failed to fetch user for page increment:', fetchErr.message);
+    throw fetchErr;
+  }
+  const currentUsed = data?.user?.app_metadata?.pages_used || 0;
+  const { error: updateErr } = await supabase.auth.admin.updateUserById(userId, {
+    app_metadata: { pages_used: currentUsed + pages },
   });
-  // Fallback if RPC function doesn't exist: fetch then update
-  if (error) {
-    console.warn('RPC increment_pages_used failed, using fallback:', error.message);
-    const { data: profile, error: fetchErr } = await supabase
-      .from('user_profiles')
-      .select('pages_used')
-      .eq('id', userId)
-      .single();
-    if (fetchErr) {
-      console.error('Failed to fetch user profile for page increment:', fetchErr.message);
-      throw fetchErr;
-    }
-    const current = profile?.pages_used || 0;
-    const { error: updateErr } = await supabase
-      .from('user_profiles')
-      .update({ pages_used: current + pages })
-      .eq('id', userId);
-    if (updateErr) {
-      console.error('Failed to update pages_used:', updateErr.message);
-      throw updateErr;
-    }
+  if (updateErr) {
+    console.error('Failed to update pages_used in app_metadata:', updateErr.message);
+    throw updateErr;
   }
 }
 
@@ -188,7 +169,6 @@ export async function deleteInputFile(storageKey) {
 function jobToRow(job) {
   return {
     id: job.id,
-    user_id: job.userId || null,
     original_name: job.originalName,
     book_context: job.bookContext || '',
     status: job.status,

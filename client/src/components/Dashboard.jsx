@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   CheckCircle,
   XCircle,
@@ -8,9 +8,12 @@ import {
   FileText,
   Plus,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 
 function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
+  const [deleting, setDeleting] = useState(null);
+
   const completedJobs  = jobs.filter((j) => j.status === 'completed');
   const failedJobs     = jobs.filter((j) => j.status === 'failed');
   const processingJobs = jobs.filter((j) => j.status === 'processing');
@@ -22,7 +25,6 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
         console.error('Download failed:', res.status);
         return;
       }
-      // If server redirected to a public URL, the fetch followed it — read as blob
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -37,6 +39,36 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
     } catch (err) {
       console.error('Download error:', err);
     }
+  };
+
+  const handleDelete = async (jobId) => {
+    if (!confirm('Delete this translation? This cannot be undone.')) return;
+    setDeleting(jobId);
+    try {
+      const res = await authFetch(`/api/translate/jobs/${jobId}`, { method: 'DELETE' });
+      if (res.ok) {
+        onRefresh?.();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        alert(d.error || 'Failed to delete');
+      }
+    } catch {
+      alert('Network error. Try again.');
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  const handleClearAll = async () => {
+    const nonProcessing = jobs.filter((j) => j.status !== 'processing');
+    if (nonProcessing.length === 0) return;
+    if (!confirm(`Delete ${nonProcessing.length} completed/failed translation(s)? This cannot be undone.`)) return;
+    for (const job of nonProcessing) {
+      try {
+        await authFetch(`/api/translate/jobs/${job.id}`, { method: 'DELETE' });
+      } catch {}
+    }
+    onRefresh?.();
   };
 
   const formatDate = (dateStr) => {
@@ -82,6 +114,16 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
           <h2 className="text-sm font-bold text-slate-900">Translation History</h2>
           <div className="flex items-center gap-2">
+            {jobs.length > 0 && (
+              <button
+                onClick={handleClearAll}
+                className="flex items-center gap-1 p-1.5 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition text-xs"
+                title="Clear all history"
+              >
+                <Trash2 size={13} />
+                <span className="hidden sm:inline">Clear All</span>
+              </button>
+            )}
             {onRefresh && (
               <button
                 onClick={onRefresh}
@@ -120,7 +162,7 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
             {jobs.map((job) => {
               const cfg = statusConfig[job.status] || statusConfig.processing;
               return (
-                <li key={job.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50 transition">
+                <li key={job.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50 transition group">
                   {/* Status icon */}
                   <div className="shrink-0">{cfg.icon}</div>
 
@@ -166,6 +208,21 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
                     >
                       <Download size={12} />
                       DOCX
+                    </button>
+                  )}
+
+                  {/* Delete button */}
+                  {job.status !== 'processing' && (
+                    <button
+                      onClick={() => handleDelete(job.id)}
+                      disabled={deleting === job.id}
+                      className="shrink-0 p-1.5 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition opacity-0 group-hover:opacity-100 disabled:opacity-50"
+                      title="Delete"
+                    >
+                      {deleting === job.id
+                        ? <Loader size={13} className="animate-spin" />
+                        : <Trash2 size={13} />
+                      }
                     </button>
                   )}
                 </li>

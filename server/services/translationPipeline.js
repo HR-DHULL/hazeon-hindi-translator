@@ -36,14 +36,21 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     // (two simultaneous uploads both passing the initial check)
     let pagesReserved = false;
     if (userRole !== 'admin' && userId) {
-      const reservation = await dbReservePages(userId, parsed.pageCount);
-      if (!reservation.success) {
-        const msg = reservation.remaining !== undefined
-          ? `Page limit would be exceeded. You have ${reservation.remaining} page(s) remaining but this document has ${parsed.pageCount} page(s). Contact admin to increase your limit.`
-          : 'Page limit would be exceeded. Contact admin to increase your limit.';
-        throw new Error(msg);
+      try {
+        const reservation = await dbReservePages(userId, parsed.pageCount);
+        if (!reservation.success) {
+          const msg = reservation.remaining !== undefined
+            ? `Page limit would be exceeded. You have ${reservation.remaining} page(s) remaining but this document has ${parsed.pageCount} page(s). Contact admin to increase your limit.`
+            : 'Page limit would be exceeded. Contact admin to increase your limit.';
+          throw new Error(msg);
+        }
+        pagesReserved = true;
+      } catch (e) {
+        if (e.message && e.message.includes('Page limit')) {
+          throw e;
+        }
+        console.warn('Page reservation failed (non-fatal):', e.message);
       }
-      pagesReserved = true;
     }
 
     const paragraphs = parsed.paragraphTexts || [];

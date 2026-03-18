@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import translate from 'google-translate-api-x';
-import { applyGlossaryPostProcessing, applyHindiCorrections, parseCustomAbbreviations } from './glossary.js';
+import { applyGlossaryPostProcessing, applyHindiCorrections, parseCustomAbbreviations, getGlossaryPrompt } from './glossary.js';
 
 // ── Engine selection ──────────────────────────────────────────────────────────
 // Uses Claude (Anthropic) if ANTHROPIC_API_KEY is set, otherwise falls back
@@ -20,18 +20,32 @@ if (USE_CLAUDE) {
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
-const UPSC_SYSTEM_PROMPT = `You are an expert Hindi translator specializing in UPSC and HCS (Haryana Civil Services) examination material.
+const UPSC_SYSTEM_PROMPT = `You are an expert Hindi translator specializing in UPSC and HCS (Haryana Civil Services) examination material. You use official Rajbhasha (राजभाषा) — formal government Hindi as used in Lok Sabha proceedings, official gazettes, and UPSC Hindi-medium papers.
 
 Your translation rules:
 1. CONTEXT FIRST: Understand how each question/answer is framed before translating. Match the formal, precise language used in civil services exams.
-2. TECHNICAL TERMS: Use standard UPSC Hindi terminology (e.g., "संविधान" not "कॉन्स्टिट्यूशन", "न्यायपालिका" not "जुडिशियरी", "राजकोषीय" not "फिस्कल").
-3. ABBREVIATIONS: Never translate abbreviations like UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, UN, NATO, IGMDP, IUCN, etc. Keep them exactly as-is in English.
-4. MCQ FORMAT: Preserve MCQ option labels exactly — (a), (b), (c), (d), A), B) — do not translate or remove them.
-5. ANSWER KEYS: Lines like "Answer: A" or "उत्तर: B" must stay intact with the original letter.
-6. NUMBERS & DATES: Keep all numbers, years, percentages, and dates in their original form.
-7. EXAMINATION LANGUAGE: Use formal Sarkari Hindi (formal government Hindi), not colloquial Hindi. The tone should match official UPSC/HCS question papers.
-8. CONCEPTS: If a concept has an established Hindi equivalent used in official government documents (e.g., "Directive Principles" = "राज्य के नीति निर्देशक तत्व"), use that exact term.
-9. OUTPUT: Return ONLY the translated Hindi text. No explanations, no notes, no English words except where rules above apply.
+2. NEVER TRANSLITERATE: Never write English words in Devanagari script. Always use the proper Hindi equivalent.
+   - WRONG: फिस्कल पॉलिसी, ज्यूडिशियरी, एग्जीक्यूटिव, ऑर्डिनेंस, ट्रिब्यूनल
+   - CORRECT: राजकोषीय नीति, न्यायपालिका, कार्यपालिका, अध्यादेश, अधिकरण
+3. TECHNICAL TERMS: Use standard UPSC Hindi terminology from official Rajbhasha glossaries.
+   - "Bill" (legislative) = विधेयक (NOT बिल)
+   - "Cabinet" = मंत्रिमंडल (NOT कैबिनेट)
+   - "Speaker" = अध्यक्ष (NOT स्पीकर/वक्ता)
+   - "House" (parliament) = सदन (NOT घर)
+   - "Motion" = प्रस्ताव (NOT गति)
+   - "Act" (law) = अधिनियम (NOT कार्य)
+4. ABBREVIATIONS: Never translate abbreviations like UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, UN, NATO, CRR, SLR, FDI, PIL, CAG, etc. Keep them exactly as-is in English.
+5. MCQ FORMAT:
+   - Preserve option labels exactly: (a), (b), (c), (d) — NEVER convert to (ए), (बी), (सी), (डी)
+   - Use "उपर्युक्त" (NOT उपरोक्त) for "above-mentioned"
+   - Use "कूट" (NOT कोड) for "code" in MCQ instructions
+   - Use formal imperative: "कीजिए" (NOT करें), "चुनिए" (NOT चुनें)
+   - Standard pattern: "निम्नलिखित कथनों पर विचार कीजिए"
+   - Standard pattern: "नीचे दिए गए कूट का प्रयोग कर सही उत्तर चुनिए"
+6. ANSWER KEYS: Lines like "Answer: A" or "उत्तर: B" must stay intact with the original letter.
+7. NUMBERS & DATES: Keep all numbers, years, percentages, and dates in their original form.
+8. EXAMINATION LANGUAGE: Use शुद्ध हिंदी (Shudh Hindi) — formal government Hindi, NOT colloquial Hindi. The tone must match official UPSC/HCS question papers.
+9. OUTPUT: Return ONLY the translated Hindi text. No explanations, no notes, no English words except abbreviations.
 
 10. GEOLOGY — CRITICAL RULES (common exam errors to avoid):
     - "lava" MUST always be "लावा". NEVER use "लाभ" (which means profit/benefit). This is the most common error.
@@ -55,7 +69,9 @@ Your translation rules:
 13. ENVIRONMENT & WILDLIFE:
     - Critically Endangered = "गंभीर रूप से संकटग्रस्त", Endangered = "संकटग्रस्त", Vulnerable = "असुरक्षित"
     - Namami Gange = "नमामि गंगे" (do not translate the mission name)
-    - IUCN Red List categories must use standard Hindi UPSC terminology`;
+    - IUCN Red List categories must use standard Hindi UPSC terminology
+
+${getGlossaryPrompt()}`;
 
 // ─── Abbreviation protection (used for Google Translate path) ─────────────────
 const PROTECTED_ABBREVIATIONS = [

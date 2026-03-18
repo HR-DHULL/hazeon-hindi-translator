@@ -148,7 +148,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       fullName: profile?.full_name || '',
       role:       profile?.role       ?? appMeta.role       ?? 'user',
       plan:       profile?.plan       ?? appMeta.plan       ?? 'free',
-      pagesUsed:  profile?.pages_used ?? 0,
+      pagesUsed:  profile?.pages_used ?? appMeta.pages_used ?? 0,
       pagesLimit: profile?.pages_limit ?? appMeta.pages_limit ?? 500,
     },
   });
@@ -196,13 +196,22 @@ router.get('/me', requireAuth, async (req, res) => {
     console.warn('Profile REST fetch failed:', e.message);
   }
 
+  // Get fresh pages_used from app_metadata (source of truth)
+  let freshPagesUsed = req.user.pagesUsed;
+  try {
+    const authUser = await supabase.auth.admin.getUserById(req.user.id);
+    if (authUser.data?.user?.app_metadata) {
+      freshPagesUsed = authUser.data.user.app_metadata.pages_used || 0;
+    }
+  } catch {}
+
   res.json({
     id: req.user.id,
     email: req.user.email,
     fullName: profile?.full_name || req.user.fullName || '',
     role: req.user.role,
     plan: req.user.plan,
-    pagesUsed: req.user.pagesUsed,
+    pagesUsed: freshPagesUsed,
     pagesLimit: req.user.pagesLimit,
   });
 });
@@ -215,14 +224,33 @@ router.post('/logout', requireAuth, async (req, res) => {
 // ─── Admin: list all users ────────────────────────────────────────────────────
 router.get('/users', requireAuth, requireAdmin, async (req, res) => {
   try {
+    // Try user_profiles table first
     const data = await restGet(
       'user_profiles?select=*&order=created_at.desc'
     );
-    if (!Array.isArray(data)) {
-      console.error('user_profiles REST returned non-array:', data);
-      return res.status(500).json({ error: 'Failed to fetch users' });
+    if (Array.isArray(data)) {
+      return res.json(data);
     }
-    res.json(data);
+
+    // Fallback: user_profiles table may not exist — fetch from Supabase Auth directly
+    console.warn('user_profiles table unavailable, falling back to Supabase Auth');
+    const { data: authData, error: authErr } = await supabase.auth.admin.listUsers();
+    if (authErr) throw authErr;
+
+    const users = (authData?.users || []).map((u) => {
+      const meta = u.app_metadata || {};
+      return {
+        id: u.id,
+        email: u.email,
+        full_name: meta.full_name || u.user_metadata?.full_name || '',
+        role: meta.role || 'user',
+        plan: meta.plan || 'free',
+        pages_used: meta.pages_used || 0,
+        pages_limit: meta.pages_limit || 500,
+        created_at: u.created_at,
+      };
+    });
+    res.json(users);
   } catch (err) {
     console.error('Error fetching users:', err);
     res.status(500).json({ error: err.message });
@@ -257,7 +285,7 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
 
   if (error) return res.status(400).json({ error: error.message });
 
-  // Create profile via REST API
+  // Create profile via REST API (non-fatal if user_profiles table doesn't exist)
   try {
     await restPost('user_profiles', {
       id: data.user.id,
@@ -269,8 +297,8 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
       pages_used: 0,
     });
   } catch (profileErr) {
-    console.error('Profile creation failed:', profileErr);
-    return res.status(500).json({ error: 'User created but profile setup failed' });
+    console.warn('Profile creation failed (table may not exist):', profileErr.message);
+    // User is still created in Supabase Auth with app_metadata — this is fine
   }
 
   res.json({ message: 'User created', userId: data.user.id });
@@ -297,7 +325,8 @@ router.patch('/users/:id', requireAuth, requireAdmin, async (req, res) => {
     try {
       await restPatch(`user_profiles?id=eq.${req.params.id}`, profileUpdates);
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      console.warn('Profile update failed (table may not exist):', err.message);
+      // Non-fatal — app_metadata sync below is the primary source of truth
     }
   }
 
@@ -327,7 +356,8 @@ router.delete('/users/:id', requireAuth, requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Invalid user ID' });
   }
   try {
-    await restDelete(`user_profiles?id=eq.${req.params.id}`);
+    // Try to delete profile (non-fatal if table doesn't exist)
+    try { await restDelete(`user_profiles?id=eq.${req.params.id}`); } catch {}
     await supabase.auth.admin.deleteUser(req.params.id);
     res.json({ message: 'User deleted' });
   } catch (err) {
@@ -343,7 +373,7 @@ router.get('/stats', requireAuth, requireAdmin, async (req, res) => {
 
     const { data: jobs } = await supabase
       .from('jobs')
-      .select('status, user_id, created_at')
+      .select('status, created_at')
       .order('created_at', { ascending: false })
       .limit(200);
 

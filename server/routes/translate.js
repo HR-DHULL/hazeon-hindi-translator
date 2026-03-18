@@ -14,6 +14,7 @@ import {
   dbGetJob,
   dbGetAllJobs,
   dbUpdateJob,
+  dbDeleteJob,
   dbCountActiveJobs,
   uploadInputFile,
 } from '../services/database.js';
@@ -114,40 +115,39 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
     console.error('Failed to save job to DB:', err.message);
   }
 
-  // Respond immediately so the client gets the jobId right away
-  res.json({ jobId, message: 'Translation started', originalName });
-
   if (process.env.NETLIFY || (IS_PROD && process.env.URL)) {
     // ── Netlify: upload file to Supabase Storage, trigger background function ──
-    // (background function runs up to 15 min — no timeout issues)
+    // IMPORTANT: Must do ALL async work BEFORE res.json() because serverless-http
+    // terminates the function as soon as the response is sent.
     try {
       const storageKey = await uploadInputFile(jobId, originalName, req.file.path);
       fs.unlink(req.file.path, () => {}); // remove from /tmp
 
       const bgUrl = `${process.env.URL}/.netlify/functions/translate-background`;
-      try {
-        const bgRes = await fetch(bgUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-internal-secret': process.env.INTERNAL_SECRET || '',
-          },
-          body: JSON.stringify({ jobId, storageKey, baseName, bookContext, userId: req.user.id, userRole: req.user.role }),
-        });
-        if (!bgRes.ok) {
-          console.error(`Background function returned ${bgRes.status}`);
-          await dbUpdateJob(jobId, { status: 'failed', message: 'Failed to start background translation.' });
-        }
-      } catch (e) {
-        console.error('Failed to trigger background function:', e.message);
-        try { await dbUpdateJob(jobId, { status: 'failed', message: 'Failed to start translation service.' }); } catch {}
+      const bgRes = await fetch(bgUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-internal-secret': process.env.INTERNAL_SECRET || '',
+        },
+        body: JSON.stringify({ jobId, storageKey, baseName, bookContext, userId: req.user.id, userRole: req.user.role }),
+      });
+
+      if (!bgRes.ok) {
+        console.error(`Background function returned ${bgRes.status}: ${await bgRes.text().catch(() => '')}`);
+        await dbUpdateJob(jobId, { status: 'failed', message: 'Failed to start background translation.' });
       }
+
+      // Respond AFTER the background function has been triggered
+      res.json({ jobId, message: 'Translation started', originalName });
     } catch (err) {
-      console.error('Failed to upload input to storage:', err.message);
-      try { await dbUpdateJob(jobId, { status: 'failed', message: 'Failed to stage file for translation.' }); } catch {}
+      console.error('Failed to start translation:', err.message);
+      try { await dbUpdateJob(jobId, { status: 'failed', message: `Failed to start translation: ${err.message}` }); } catch {}
+      res.json({ jobId, message: 'Translation queued (may be delayed)', originalName });
     }
   } else {
-    // ── Local / Render: run translation directly in background ────────────────
+    // ── Local / Render: respond immediately, run translation in background ────
+    res.json({ jobId, message: 'Translation started', originalName });
     processTranslation(jobId, req.file.path, baseName, bookContext, req.user.id, req.user.role, OUTPUT_DIR)
       .catch(async (error) => {
         console.error(`Job ${jobId} failed:`, error);
@@ -215,6 +215,30 @@ router.get('/jobs', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Failed to load jobs:', err.message);
     res.json([]);
+  }
+});
+
+// ─── DELETE /api/translate/jobs/:jobId ────────────────────────────────────────
+router.delete('/jobs/:jobId', requireAuth, async (req, res) => {
+  try {
+    const job = await dbGetJob(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    // Delete output files from storage
+    if (job.outputFiles?.length) {
+      const { createClient } = await import('@supabase/supabase-js');
+      const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+      const paths = job.outputFiles.map(f => `${req.params.jobId}/${f.name}`).filter(Boolean);
+      if (paths.length) {
+        await supabase.storage.from('outputs').remove(paths).catch(() => {});
+      }
+    }
+
+    await dbDeleteJob(req.params.jobId);
+    res.json({ message: 'Job deleted' });
+  } catch (err) {
+    console.error('Failed to delete job:', err.message);
+    res.status(500).json({ error: 'Failed to delete job' });
   }
 });
 
