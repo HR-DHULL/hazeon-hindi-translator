@@ -1,10 +1,20 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Supabase client — credentials come from environment variables
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+// Lazy Supabase client — only created when first used (allows server to start without credentials)
+let _supabase = null;
+function getSupabase() {
+  if (!_supabase) {
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+      throw new Error('Supabase not configured. Set SUPABASE_URL and SUPABASE_SERVICE_KEY in .env');
+    }
+    _supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+  }
+  return _supabase;
+}
+// Backward-compatible getter
+const supabase = new Proxy({}, {
+  get: (_, prop) => getSupabase()[prop],
+});
 
 // ─── Job CRUD ────────────────────────────────────────────────────────────────
 

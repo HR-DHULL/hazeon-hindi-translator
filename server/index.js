@@ -4,9 +4,14 @@ import 'dotenv/config';
 const REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY'];
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length > 0) {
-  console.error(`FATAL: Missing required environment variables: ${missing.join(', ')}`);
-  console.error('Set these in your .env file or hosting provider before starting the server.');
-  process.exit(1);
+  if (process.env.NODE_ENV === 'production') {
+    console.error(`FATAL: Missing required environment variables: ${missing.join(', ')}`);
+    console.error('Set these in your .env file or hosting provider before starting the server.');
+    process.exit(1);
+  }
+  console.warn(`\n  ⚠ WARNING: Missing env vars: ${missing.join(', ')}`);
+  console.warn('  Create a .env file from .env.example and add your Supabase credentials.');
+  console.warn('  The server will start but API calls will fail until configured.\n');
 }
 
 process.on('uncaughtException', (err) => {
@@ -53,8 +58,31 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: false }));
 
-app.use('/api/auth', authRouter);
-app.use('/api/translate', translateRouter);
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    configured: missing.length === 0,
+    missing: missing.length > 0 ? missing : undefined,
+  });
+});
+
+// Block API calls early if Supabase is not configured
+if (missing.length > 0) {
+  app.use('/api', (req, res) => {
+    res.status(503).json({
+      error: `Server not configured. Missing environment variables: ${missing.join(', ')}. Create a .env file from .env.example with your Supabase credentials.`,
+    });
+  });
+} else {
+  // ── One-time DB setup: ensure user_profiles table exists ───────────────
+  import('./services/dbSetup.js')
+    .then((m) => m.ensureTables())
+    .catch((err) => console.warn('DB auto-setup skipped:', err.message));
+
+  app.use('/api/auth', authRouter);
+  app.use('/api/translate', translateRouter);
+}
 
 // Serve React build in local production mode
 if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
