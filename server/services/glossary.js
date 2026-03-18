@@ -182,6 +182,87 @@ export const UPSC_HCS_GLOSSARY = {
   'Digital India': 'डिजिटल भारत',
   'E-Governance': 'ई-शासन',
 
+  // Defense & Military (IGMDP Missiles) — UPSC Science & Technology
+  // IMPORTANT: Trishul=surface-to-AIR, Prithvi=surface-to-SURFACE, NAG=anti-tank, Agni=surface-to-surface ballistic
+  'Integrated Guided Missile Development Programme': 'एकीकृत निर्देशित मिसाइल विकास कार्यक्रम',
+  'IGMDP': 'एकीकृत निर्देशित मिसाइल विकास कार्यक्रम (IGMDP)',
+  'Surface-to-air missile': 'सतह से वायु मिसाइल',
+  'Surface-to-surface missile': 'सतह से सतह मिसाइल',
+  'Anti-tank missile': 'टैंक-रोधी मिसाइल',
+  'Anti-tank': 'टैंक-रोधी',
+  'Ballistic missile': 'बैलिस्टिक मिसाइल',
+  'Cruise missile': 'क्रूज मिसाइल',
+  'DRDO': 'रक्षा अनुसंधान और विकास संगठन (DRDO)',
+
+  // Geology & Physical Geography — UPSC Geography
+  // CRITICAL: "lava" = "लावा" (NOT "लाभ" which means profit/benefit)
+  'Lava': 'लावा',
+  'lava': 'लावा',
+  'Magma': 'मैग्मा',
+  'Basaltic lava': 'बेसाल्टिक लावा',
+  'Rhyolitic lava': 'राइओलिटिक लावा',
+  'Andesitic lava': 'एंडेसिटिक लावा',
+  'Mafic lava': 'मूल लावा',
+  'Felsic lava': 'अम्लीय लावा',
+  'Viscosity': 'श्यानता',
+  'Silica': 'सिलिका',
+  'Volcano': 'ज्वालामुखी',
+  'Volcanic eruption': 'ज्वालामुखी विस्फोट',
+  'Eruption': 'विस्फोट',
+  'Caldera': 'काल्डेरा',
+  'Pyroclastic': 'पाइरोक्लास्टिक',
+  // Intrusive igneous bodies
+  'Laccolith': 'लैकोलिथ',
+  'Lopolith': 'लोपोलिथ',
+  'Phacolith': 'फैकोलिथ',
+  'Batholith': 'बैथोलिथ',
+  'Sill': 'सिल',
+  'Dyke': 'डाइक',
+  'Dike': 'डाइक',
+  // Cave formations
+  'Stalactite': 'स्टैलेक्टाइट',
+  'Stalagmite': 'स्टैलेग्माइट',
+  'Speleothem': 'स्पेलियोथेम',
+  'Stalactites': 'स्टैलेक्टाइट्स',
+  'Stalagmites': 'स्टैलेग्माइट्स',
+  // Plate Tectonics — CRITICAL UPSC MISTAKE AREA
+  // Ring of Fire = CONVERGENT (अभिसारी), NOT divergent (अपसारी)
+  'Pacific Ring of Fire': 'प्रशांत अग्नि वलय',
+  'Ring of Fire': 'अग्नि वलय',
+  'Convergent plate boundary': 'अभिसारी प्लेट सीमा',
+  'Divergent plate boundary': 'अपसारी प्लेट सीमा',
+  'Convergent': 'अभिसारी',
+  'Divergent': 'अपसारी',
+  'Subduction zone': 'सबडक्शन ज़ोन',
+  'Plate Tectonics': 'प्लेट विवर्तनिकी',
+  'Tectonic plates': 'विवर्तनिक प्लेटें',
+  'Anticline': 'अपनति',
+  'Syncline': 'अभिनति',
+  'Fold': 'वलन',
+  'Fault': 'भ्रंश',
+  'Intrusive': 'अंतर्भेदी',
+  'Extrusive': 'बहिर्भेदी',
+  'Igneous rock': 'आग्नेय शैल',
+  'Sedimentary rock': 'अवसादी शैल',
+  'Metamorphic rock': 'कायांतरित शैल',
+
+  // Environment & Wildlife — UPSC Environment
+  'Critically Endangered': 'गंभीर रूप से संकटग्रस्त',
+  'Endangered': 'संकटग्रस्त',
+  'Vulnerable': 'असुरक्षित/संवेदनशील',
+  'Near Threatened': 'निकट संकटग्रस्त',
+  'Least Concern': 'कम चिंता',
+  'IUCN Red List': 'IUCN रेड लिस्ट',
+  'Wildlife sanctuary': 'वन्यजीव अभयारण्य',
+  'National Park': 'राष्ट्रीय उद्यान',
+  'Biosphere Reserve': 'जैवमंडल आरक्षित क्षेत्र',
+  'Tiger Reserve': 'बाघ अभयारण्य',
+  'Namami Gange': 'नमामि गंगे',
+  'Project Tiger': 'प्रोजेक्ट टाइगर',
+  'Project Elephant': 'प्रोजेक्ट एलीफेंट',
+  'Wetland': 'आर्द्रभूमि',
+  'Ramsar site': 'रामसर स्थल',
+
   // Ethics & Governance (GS Paper IV)
   'Ethics': 'नैतिकता',
   'Integrity': 'सत्यनिष्ठा',
@@ -200,6 +281,58 @@ export const UPSC_HCS_GLOSSARY = {
   'Vigilance': 'सतर्कता',
   'Corruption': 'भ्रष्टाचार',
 };
+
+/**
+ * Known incorrect Hindi translations → correct Hindi translations.
+ * Applied as post-processing on ALL translated text to fix systematic errors.
+ *
+ * These are ordered pairs: [wrong, correct]. Longer/more-specific patterns first.
+ * IMPORTANT: Only add patterns specific enough to not break unrelated sentences.
+ */
+export const HINDI_CORRECTIONS = [
+  // "lava" systematically mistranslated as "लाभ" (benefit) — CRITICAL FIX
+  // These patterns are geology-specific (preceded by mineral/rock type names)
+  ['बेसाल्टिक लाभ', 'बेसाल्टिक लावा'],
+  ['राइओलिटिक लाभ', 'राइओलिटिक लावा'],
+  ['राडयोलिटिक लाभ', 'राइओलिटिक लावा'],
+  ['एंडेसिटिक लाभ', 'एंडेसिटिक लावा'],
+  ['अम्लीय लाभ', 'अम्लीय लावा'],
+  ['मूल लाभ', 'मूल लावा'],
+  ['क्षारीय लाभ', 'क्षारीय लावा'],
+
+  // Plate tectonics: Ring of Fire is CONVERGENT, not divergent
+  // Fix: "अपसारी" used incorrectly for Ring of Fire context
+  ['प्रशांत अग्नि वलय अपसारी', 'प्रशांत अग्नि वलय अभिसारी'],
+  ['अग्नि वलय अपसारी प्लेट', 'अग्नि वलय अभिसारी प्लेट'],
+
+  // Missile type corrections (IGMDP context)
+  // Trishul = surface-to-AIR (सतह से वायु), NOT surface-to-surface
+  ['त्रिशूल - सतह से सतह', 'त्रिशूल - सतह से वायु'],
+  ['त्रिशूल – सतह से सतह', 'त्रिशूल – सतह से वायु'],
+  // Prithvi = surface-to-SURFACE (सतह से सतह), NOT surface-to-air
+  ['पृथ्वी - सतह से हवा', 'पृथ्वी - सतह से सतह'],
+  ['पृथ्वी – सतह से हवा', 'पृथ्वी – सतह से सतह'],
+  ['पृथ्वी - सतह से वायु', 'पृथ्वी - सतह से सतह'],
+  ['पृथ्वी – सतह से वायु', 'पृथ्वी – सतह से सतह'],
+];
+
+/**
+ * Apply Hindi-to-Hindi corrections for known systematic mistranslations.
+ * Call this AFTER applyGlossaryPostProcessing.
+ *
+ * @param {string} hindiText - Translated Hindi text
+ * @returns {string} Corrected Hindi text
+ */
+export function applyHindiCorrections(hindiText) {
+  if (!hindiText) return hindiText;
+  let result = hindiText;
+  for (const [wrong, correct] of HINDI_CORRECTIONS) {
+    if (result.includes(wrong)) {
+      result = result.split(wrong).join(correct);
+    }
+  }
+  return result;
+}
 
 /**
  * Build the glossary instruction string for the translation prompt.

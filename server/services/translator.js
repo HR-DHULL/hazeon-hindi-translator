@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import translate from 'google-translate-api-x';
-import { applyGlossaryPostProcessing, parseCustomAbbreviations } from './glossary.js';
+import { applyGlossaryPostProcessing, applyHindiCorrections, parseCustomAbbreviations } from './glossary.js';
 
 // ── Engine selection ──────────────────────────────────────────────────────────
 // Uses Claude (Anthropic) if ANTHROPIC_API_KEY is set, otherwise falls back
@@ -25,13 +25,37 @@ const UPSC_SYSTEM_PROMPT = `You are an expert Hindi translator specializing in U
 Your translation rules:
 1. CONTEXT FIRST: Understand how each question/answer is framed before translating. Match the formal, precise language used in civil services exams.
 2. TECHNICAL TERMS: Use standard UPSC Hindi terminology (e.g., "संविधान" not "कॉन्स्टिट्यूशन", "न्यायपालिका" not "जुडिशियरी", "राजकोषीय" not "फिस्कल").
-3. ABBREVIATIONS: Never translate abbreviations like UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, UN, NATO, etc. Keep them exactly as-is in English.
+3. ABBREVIATIONS: Never translate abbreviations like UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, UN, NATO, IGMDP, IUCN, etc. Keep them exactly as-is in English.
 4. MCQ FORMAT: Preserve MCQ option labels exactly — (a), (b), (c), (d), A), B) — do not translate or remove them.
 5. ANSWER KEYS: Lines like "Answer: A" or "उत्तर: B" must stay intact with the original letter.
 6. NUMBERS & DATES: Keep all numbers, years, percentages, and dates in their original form.
 7. EXAMINATION LANGUAGE: Use formal Sarkari Hindi (formal government Hindi), not colloquial Hindi. The tone should match official UPSC/HCS question papers.
 8. CONCEPTS: If a concept has an established Hindi equivalent used in official government documents (e.g., "Directive Principles" = "राज्य के नीति निर्देशक तत्व"), use that exact term.
-9. OUTPUT: Return ONLY the translated Hindi text. No explanations, no notes, no English words except where rules above apply.`;
+9. OUTPUT: Return ONLY the translated Hindi text. No explanations, no notes, no English words except where rules above apply.
+
+10. GEOLOGY — CRITICAL RULES (common exam errors to avoid):
+    - "lava" MUST always be "लावा". NEVER use "लाभ" (which means profit/benefit). This is the most common error.
+    - Basaltic lava = "बेसाल्टिक लावा", Rhyolitic lava = "राइओलिटिक लावा", Andesitic lava = "एंडेसिटिक लावा"
+    - magma = "मैग्मा", viscosity = "श्यानता", silica = "सिलिका", eruption = "विस्फोट"
+    - Intrusive igneous bodies: Laccolith = "लैकोलिथ" (dome with flat base), Lopolith = "लोपोलिथ" (saucer-shaped), Phacolith = "फैकोलिथ" (lens at anticline/syncline), Batholith = "बैथोलिथ" (large granitic mass)
+    - Cave formations: stalactite = "स्टैलेक्टाइट" (hangs from ceiling), stalagmite = "स्टैलेग्माइट" (rises from floor)
+
+11. PLATE TECTONICS — CRITICAL RULES:
+    - "convergent" = "अभिसारी", "divergent" = "अपसारी" — do NOT swap these.
+    - Pacific Ring of Fire is associated with CONVERGENT (अभिसारी) plate boundaries, NOT divergent.
+    - Subduction zone = "सबडक्शन ज़ोन", anticline = "अपनति", syncline = "अभिनति"
+
+12. IGMDP MISSILES — MUST MATCH EXACTLY:
+    - Trishul = "त्रिशूल" — Surface-to-AIR missile (सतह से वायु मिसाइल), short-range
+    - Prithvi = "पृथ्वी" — Surface-to-SURFACE missile (सतह से सतह मिसाइल)
+    - Agni = "अग्नि" — Surface-to-surface ballistic missile (सतह से सतह बैलिस्टिक मिसाइल)
+    - NAG = "नाग" — Anti-tank missile (टैंक-रोधी मिसाइल)
+    - Akash = "आकाश" — Surface-to-air missile (सतह से वायु मिसाइल)
+
+13. ENVIRONMENT & WILDLIFE:
+    - Critically Endangered = "गंभीर रूप से संकटग्रस्त", Endangered = "संकटग्रस्त", Vulnerable = "असुरक्षित"
+    - Namami Gange = "नमामि गंगे" (do not translate the mission name)
+    - IUCN Red List categories must use standard Hindi UPSC terminology`;
 
 // ─── Abbreviation protection (used for Google Translate path) ─────────────────
 const PROTECTED_ABBREVIATIONS = [
@@ -170,6 +194,7 @@ export async function translateChunk(text, chunkIndex, totalChunks, onProgress, 
       translatedText = await translateChunkRaw(text, customAbbrs);
     }
     translatedText = applyGlossaryPostProcessing(translatedText, text);
+    translatedText = applyHindiCorrections(translatedText);
 
     if (onProgress) {
       onProgress({
@@ -261,6 +286,7 @@ async function translateParagraphsWithClaude(paragraphs, onProgress) {
         nonEmptyIndices.forEach((origIdx, ri) => {
           let t = results[ri] || batch[origIdx];
           t = applyGlossaryPostProcessing(t, batch[origIdx]);
+          t = applyHindiCorrections(t);
           batchResult[origIdx] = t;
         });
       }
@@ -317,6 +343,7 @@ async function translateParagraphsWithGoogle(paragraphs, customAbbrs, onProgress
             t = t.replace(/^[""\u201c\u201d]+|[""\u201c\u201d]+$/g, '').trim();
           }
           t = applyGlossaryPostProcessing(t, batch[i]);
+          t = applyHindiCorrections(t);
           translated.push(t);
         }
       } else {
@@ -329,6 +356,7 @@ async function translateParagraphsWithGoogle(paragraphs, customAbbrs, onProgress
             const r = await translate(safePara, { from: 'en', to: 'hi' });
             let t = restoreAbbreviations(decodeHtmlEntities((r.text || '').trim()), pMap);
             t = applyGlossaryPostProcessing(t, para);
+            t = applyHindiCorrections(t);
             translated.push(t);
           } catch { translated.push(para); }
           await new Promise((r) => setTimeout(r, 200));
@@ -343,6 +371,7 @@ async function translateParagraphsWithGoogle(paragraphs, customAbbrs, onProgress
           const r = await translate(safePara, { from: 'en', to: 'hi' });
           let t = restoreAbbreviations(decodeHtmlEntities((r.text || '').trim()), pMap);
           t = applyGlossaryPostProcessing(t, para);
+          t = applyHindiCorrections(t);
           translated.push(t);
         } catch { translated.push(para); }
         await new Promise((r) => setTimeout(r, 200));
