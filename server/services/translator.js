@@ -4,13 +4,14 @@ import { applyContextDisambiguation, getDisambiguationPrompt } from './contextDi
 
 // ── Anthropic Claude AI — REQUIRED ───────────────────────────────────────────
 if (!process.env.ANTHROPIC_API_KEY) {
-  console.error('  ERROR: ANTHROPIC_API_KEY is required. Set it in your .env file.');
+  console.error('  WARNING: ANTHROPIC_API_KEY is not set. Translation will fail until configured.');
   console.error('  Get your key from: console.anthropic.com → API Keys');
-  process.exit(1);
 }
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-console.log('  Translation engine: Claude AI (context-aware UPSC/HCS mode)');
+const anthropic = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null;
+if (anthropic) console.log('  Translation engine: Claude AI (context-aware UPSC/HCS mode)');
 
 // ── Claude model — use Haiku for speed/cost, Sonnet for best quality ─────────
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
@@ -132,6 +133,7 @@ ${getGlossaryPrompt()}`;
  */
 async function translateWithClaude(paragraphs) {
   if (paragraphs.length === 0) return [];
+  if (!anthropic) throw new Error('ANTHROPIC_API_KEY is not configured. Set it in environment variables.');
 
   // Number each paragraph so we can split the output reliably
   const numbered = paragraphs
