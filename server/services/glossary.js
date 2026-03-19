@@ -805,8 +805,8 @@ function restoreMissingOptionLabels(text) {
           j--;
           continue;
         }
-        // Already has option label — stop
-        if (trimmed.match(/^\([a-d]\)/)) break;
+        // Already has option label (either "(a)" or "a)") — stop
+        if (trimmed.match(/^\(?[a-d]\)/)) break;
         // Looks like a question text or heading (too long or has question patterns)
         if (trimmed.match(/^\d+[\.\)]/) || trimmed.match(/^निम्नलिखित|^कथन|^कूट|^नीचे दिए/)) break;
         optionCandidates.unshift({ index: j, text: trimmed });
@@ -819,8 +819,8 @@ function restoreMissingOptionLabels(text) {
         for (let k = 0; k < 4; k++) {
           const idx = optionCandidates[k].index;
           const line = lines[idx];
-          // Don't re-label if already labeled
-          if (!line.trim().match(/^\([a-d]\)/)) {
+          // Don't re-label if already labeled (either "(a)" or "a)" format)
+          if (!line.trim().match(/^\(?[a-d]\)/)) {
             const leadingSpace = line.match(/^(\s*)/)[1];
             lines[idx] = leadingSpace + labels[k] + ' ' + line.trim();
           }
@@ -828,6 +828,57 @@ function restoreMissingOptionLabels(text) {
       }
     }
     // Don't push here — we modify in-place and join at the end
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Remove duplicate MCQ options.
+ * Claude sometimes outputs options BOTH inline in the question text
+ * AND as separate lines below, causing every option to appear twice.
+ *
+ * Pattern detected:
+ *   "...से है?  (a) मैंग्रोव और तटीय आर्द्रभूमि  (b) उष्णकटिबंधीय वर्षावन  (c) अंतःस्थलीय आर्द्रभूमि  (d) घास के मैदान और सवाना"
+ *   a) मैंग्रोव और तटीय आर्द्रभूमि
+ *   b) ...
+ *   c) ...
+ *   d) ...
+ *
+ * Fix: When a line contains all 4 inline options (a)...(b)...(c)...(d)...,
+ * AND separate option lines follow, remove the inline options from the question line
+ * and keep only the separate lines (which are properly formatted).
+ */
+function removeDuplicateOptions(text) {
+  if (!text) return text;
+  const lines = text.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Check if this line has ALL 4 inline options: (a)...(b)...(c)...(d)...
+    const inlinePattern = /\(a\)\s*.+?\s*\(b\)\s*.+?\s*\(c\)\s*.+?\s*\(d\)\s*.+/;
+    if (!inlinePattern.test(line)) continue;
+
+    // Look ahead for separate option lines (a) or a) on their own lines
+    let separateCount = 0;
+    let j = i + 1;
+    while (j < lines.length && j <= i + 8) { // look within next 8 lines
+      const trimmed = lines[j].trim();
+      if (trimmed === '') { j++; continue; }
+      if (/^\(?[a-d]\)/.test(trimmed)) {
+        separateCount++;
+        j++;
+      } else {
+        break;
+      }
+    }
+
+    // If we found at least 3 separate option lines after the inline ones, it's a duplicate
+    if (separateCount >= 3) {
+      // Strip the inline options from the question line — keep only text before (a)
+      lines[i] = line.replace(/\s*\(a\)\s*.+?\s*\(b\)\s*.+?\s*\(c\)\s*.+?\s*\(d\)\s*.+/, '');
+    }
   }
 
   return lines.join('\n');
@@ -1054,6 +1105,12 @@ function fixLetterK(text) {
 export function applyHindiCorrections(hindiText) {
   if (!hindiText) return hindiText;
   let result = hindiText;
+
+  // Remove duplicate options (inline + separate lines = double options)
+  result = removeDuplicateOptions(result);
+
+  // Normalize option labels: "a)" → "(a)", "b)" → "(b)", etc. on their own lines
+  result = result.replace(/^(\s*)([a-d])\)\s+/gm, '$1($2) ');
 
   // Fix MCQ label corruption first (एमसीक्यू → (a)/(b)/(c)/(d))
   result = fixMCQLabels(result);

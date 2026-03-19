@@ -74,6 +74,17 @@ Your translation rules:
 17. ROMAN NUMERALS: Keep I, II, III, IV etc. as-is. NEVER translate "I" as "मैं" when it's a Roman numeral.
 
 18. PM/AM TIME: Keep "PM" and "AM" as-is in time contexts (e.g., "5 PM" stays "5 PM", NOT "5 अपराह्न" or "5 पीएम").
+19. NO DUPLICATE OPTIONS: For MCQ questions, output each option ONLY ONCE on its OWN separate line. NEVER put options inline within the question text AND also on separate lines. The correct format is:
+   Question text here?
+   (a) Option 1
+   (b) Option 2
+   (c) Option 3
+   (d) Option 4
+   WRONG format (options inline + repeated on separate lines):
+   Question text here? (a) Option 1 (b) Option 2 (c) Option 3 (d) Option 4
+   (a) Option 1
+   (b) Option 2
+   ...
 
 10. GEOLOGY — CRITICAL RULES (common exam errors to avoid):
     - "lava" MUST always be "लावा". NEVER use "लाभ" (which means profit/benefit). This is the most common error.
