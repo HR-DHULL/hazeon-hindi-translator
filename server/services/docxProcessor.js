@@ -112,8 +112,8 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
 /**
  * Unescape XML entities back to plain text.
  * DOCX XML stores & as &amp;, < as &lt;, etc.
- * We must decode these before sending text to Google Translate,
- * otherwise "Research &amp; Training" → Google sees literal "&amp;" →
+ * We must decode these before sending text to the translation engine,
+ * otherwise "Research &amp; Training" → translator sees literal "&amp;" →
  * translates & to "एवं" but leaves "amp;" as remnant garbage.
  */
 function unescapeXml(str) {
@@ -151,7 +151,7 @@ export function extractParagraphTexts(xml) {
 function escapeXml(str) {
   // Only & < > need escaping in XML text nodes.
   // " and ' do NOT need escaping in text content (only in attribute values).
-  // Escaping " causes Google Translate HTML entities to double-encode → visible &quot; in Word.
+  // Escaping " causes HTML entities to double-encode → visible &quot; in Word.
   return str
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

@@ -601,6 +601,125 @@ export const UPSC_HCS_GLOSSARY = {
   'Raga': 'राग',
   'Tala': 'ताल',
 
+  // ── New Terms from NCERT/UPSC Corpus Analysis (108 entries) ────────────────
+
+  // Science & Biology
+  'Mitochondria': 'माइटोकॉन्ड्रिया',
+  'Chromosome': 'गुणसूत्र',
+  'Photosynthesis': 'प्रकाश संश्लेषण',
+  'Nucleus': 'केंद्रक',
+  'Membrane': 'झिल्ली',
+  'Catalyst': 'उत्प्रेरक',
+  'Oxidation': 'ऑक्सीकरण',
+  'Reduction': 'अपचयन',
+  'Electrolysis': 'विद्युत अपघटन',
+  'Superconductor': 'अतिचालक',
+  'Radioactivity': 'रेडियोधर्मिता',
+  'Isotope': 'समस्थानिक',
+  'Polymer': 'बहुलक',
+  'Monomer': 'एकलक',
+  'Enzyme': 'एंजाइम',
+  'Hormone': 'हार्मोन',
+  'Antibody': 'प्रतिरक्षी',
+  'Antigen': 'प्रतिजन',
+  'Vaccine': 'टीका',
+  'Pathogen': 'रोगजनक',
+  'Mutation': 'उत्परिवर्तन',
+  'Natural Selection': 'प्राकृतिक वरण',
+  'Adaptation': 'अनुकूलन',
+  'Symbiosis': 'सहजीवन',
+  'Parasite': 'परजीवी',
+  'Ecosystem Services': 'पारिस्थितिकी तंत्र सेवाएं',
+  'Carbon Sequestration': 'कार्बन पृथक्करण',
+  'Biogas': 'जैव गैस',
+  'Biomass': 'जैवभार',
+
+  // Geography & Physical Geography
+  'Denudation': 'अनाच्छादन',
+  'Weathering': 'अपक्षय',
+  'Erosion': 'अपरदन',
+  'Lithosphere': 'स्थलमंडल',
+  'Hydrosphere': 'जलमंडल',
+  'Cryosphere': 'हिममंडल',
+  'Atmosphere': 'वायुमंडल',
+  'Isobar': 'समदाब रेखा',
+  'Isotherm': 'समताप रेखा',
+  'Isohyet': 'समवर्षा रेखा',
+  'Contour': 'समोच्च रेखा',
+  'Geomorphology': 'भू-आकृति विज्ञान',
+  'Peneplain': 'समप्राय मैदान',
+  'Moraine': 'हिमोढ़',
+  'Cirque': 'सर्क',
+  'Fjord': 'फ्योर्ड',
+  'Meander': 'विसर्प',
+  'Levee': 'तटबंध',
+  'Floodplain': 'बाढ़ का मैदान',
+  'Tributary': 'सहायक नदी',
+  'Distributary': 'वितरिका',
+  'El Nino': 'अल नीनो',
+  'La Nina': 'ला नीना',
+  'ENSO': 'एल नीनो दक्षिणी दोलन (ENSO)',
+  'Jet Stream': 'जेट धारा',
+  'Trade Winds': 'व्यापारिक पवनें',
+  'Westerlies': 'पछुआ पवनें',
+  'Coriolis Effect': 'कोरिओलिस प्रभाव',
+  'Hadley Cell': 'हेडली कोशिका',
+  'Ferrel Cell': 'फेरेल कोशिका',
+
+  // Polity Additions
+  'Anti-Defection Law': 'दल-बदल विरोधी कानून',
+  'Sedition': 'राजद्रोह',
+  'Preventive Detention': 'निवारक निरोध',
+  'Delegated Legislation': 'प्रत्यायोजित विधान',
+  'Basic Structure Doctrine': 'मूल संरचना सिद्धांत',
+  'Lame Duck Session': 'पंगु सत्र',
+  'Pro-tem Speaker': 'अस्थायी अध्यक्ष',
+  'Standing Committee': 'स्थायी समिति',
+  'Select Committee': 'प्रवर समिति',
+  'Joint Parliamentary Committee': 'संयुक्त संसदीय समिति',
+  'Cooperative Federalism': 'सहकारी संघवाद',
+  'Competitive Federalism': 'प्रतिस्पर्धी संघवाद',
+  'Separation of Powers': 'शक्तियों का पृथक्करण',
+  'Constitutionalism': 'संविधानवाद',
+  'Decentralization': 'विकेंद्रीकरण',
+  'Affirmative Action': 'सकारात्मक कार्रवाई',
+
+  // Economics Additions
+  'Devaluation': 'अवमूल्यन',
+  'Monetary Contraction': 'मौद्रिक संकुचन',
+  'Supplementary Grant': 'अनुपूरक अनुदान',
+  'Token Grant': 'सांकेतिक अनुदान',
+  'Excess Grant': 'अतिरिक्त अनुदान',
+  'Zero-based Budget': 'शून्य आधारित बजट',
+  'Outcome Budget': 'परिणाम बजट',
+  'Supply': 'आपूर्ति',
+  'Demand': 'मांग',
+  'Entrepreneur': 'उद्यमी',
+  'Enterprise': 'उद्यम',
+  'Acquisition': 'अधिग्रहण',
+  'Stock Exchange': 'शेयर बाज़ार',
+  'Eutrophication': 'सुपोषण',
+
+  // Ethics Additions
+  'Attitude': 'अभिवृत्ति',
+  'Empathy': 'समानुभूति',
+  'Sympathy': 'सहानुभूति',
+  'Morality': 'नैतिकता',
+  'Non-partisanship': 'गैर-पक्षपात',
+  'Utilitarianism': 'उपयोगितावाद',
+  'Egalitarianism': 'समतावाद',
+  'Pluralism': 'बहुलवाद',
+
+  // History Additions
+  'Feudalism': 'सामंतवाद',
+  'Socialism': 'समाजवाद',
+  'Communism': 'साम्यवाद',
+  'Capitalism': 'पूंजीवाद',
+  'Fascism': 'फासीवाद',
+  'Industrial Revolution': 'औद्योगिक क्रांति',
+  'Peasant Movement': 'किसान आंदोलन',
+  'Tribal Revolt': 'जनजातीय विद्रोह',
+
   // ── Ethics & Governance (GS Paper IV) ──────────────────────────────────────
   'Ethics': 'नैतिकता',
   'Integrity': 'सत्यनिष्ठा',
@@ -625,57 +744,6 @@ export const UPSC_HCS_GLOSSARY = {
   'Compassion': 'करुणा',
   'Tolerance': 'सहिष्णुता',
   'Dedication': 'समर्पण',
-};
-
-// ── Google Translate Correction Map ──────────────────────────────────────────
-// When using Google Translate, these common wrong outputs get corrected.
-// Format: { wrongHindi: correctHindi }
-export const GT_CORRECTIONS = {
-  // Transliterations → proper Hindi
-  'फिस्कल': 'राजकोषीय',
-  'मॉनेटरी': 'मौद्रिक',
-  'ज्यूडिशियरी': 'न्यायपालिका',
-  'एग्जीक्यूटिव': 'कार्यपालिका',
-  'लेजिस्लेचर': 'विधानमंडल',
-  'ऑर्डिनेंस': 'अध्यादेश',
-  'ट्रिब्यूनल': 'अधिकरण',
-  'फेडरल': 'संघीय',
-  'सेक्युलर': 'पंथनिरपेक्ष',
-  'डेमोक्रेटिक': 'लोकतांत्रिक',
-  'रिपब्लिक': 'गणराज्य',
-  'सॉवरेन': 'संप्रभु',
-  'इन्फ्लेशन': 'मुद्रास्फीति',
-  'डिफ्लेशन': 'अपस्फीति',
-  'स्टैगफ्लेशन': 'मुद्रास्फीतिजनित मंदी',
-  'डीमोनेटाइजेशन': 'विमुद्रीकरण',
-  'प्राइवेटाइजेशन': 'निजीकरण',
-  'लिबरलाइजेशन': 'उदारीकरण',
-  'ग्लोबलाइजेशन': 'वैश्वीकरण',
-  'डिसइन्वेस्टमेंट': 'विनिवेश',
-  'इम्पीचमेंट': 'महाभियोग',
-  'एडजर्नमेंट': 'स्थगन',
-  'प्रोरोगेशन': 'सत्रावसान',
-  'डिजोल्यूशन': 'विघटन',
-  'नोटिफिकेशन': 'अधिसूचना',
-  'सर्कुलर': 'परिपत्र',
-  'मेमोरेंडम': 'ज्ञापन',
-  'डेप्युटेशन': 'प्रतिनियुक्ति',
-  'ऑडिट': 'लेखापरीक्षा',
-  'रैटिफिकेशन': 'अनुसमर्थन',
-  'एफिडेविट': 'शपथपत्र',
-  'पेटीशन': 'याचिका',
-
-  // Wrong context → correct context
-  'वक्ता': 'अध्यक्ष',  // Speaker (parliamentary)
-  'अलमारी': 'मंत्रिमंडल',  // Cabinet
-  'कोर्ट': 'न्यायालय',
-
-  // MCQ pattern corrections
-  'उपरोक्त': 'उपर्युक्त',
-  'कोड': 'कूट',
-  'चुनें': 'चुनिए',
-  'करें': 'कीजिए',
-  'विचार करें': 'विचार कीजिए',
 };
 
 /**
@@ -757,14 +825,7 @@ export function applyGlossaryPostProcessing(translatedText, originalText) {
   const upperOriginal = originalText.toUpperCase();
   let result = translatedText;
 
-  // Step 1: Apply Google Translate corrections (fix transliterations and wrong context)
-  for (const [wrong, correct] of Object.entries(GT_CORRECTIONS)) {
-    if (result.includes(wrong)) {
-      result = result.replaceAll(wrong, correct);
-    }
-  }
-
-  // Step 2: Replace any remaining English terms with glossary Hindi
+  // Replace any remaining English terms with glossary Hindi
   // Sort by length (longest first) to avoid partial replacements
   const sortedEntries = Object.entries(UPSC_HCS_GLOSSARY)
     .sort((a, b) => b[0].length - a[0].length);

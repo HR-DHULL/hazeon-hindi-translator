@@ -12,3 +12,4 @@ server/jobs.json
 
 # Local Netlify folder
 .netlify
+.vercel

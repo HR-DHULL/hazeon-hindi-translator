@@ -1,20 +1,16 @@
 import Anthropic from '@anthropic-ai/sdk';
-import translate from 'google-translate-api-x';
-import { applyGlossaryPostProcessing, applyHindiCorrections, parseCustomAbbreviations, getGlossaryPrompt } from './glossary.js';
+import { applyGlossaryPostProcessing, applyHindiCorrections, getGlossaryPrompt } from './glossary.js';
+import { applyContextDisambiguation, getDisambiguationPrompt } from './contextDisambiguation.js';
 
-// ── Engine selection ──────────────────────────────────────────────────────────
-// Uses Claude (Anthropic) if ANTHROPIC_API_KEY is set, otherwise falls back
-// to the free Google Translate unofficial API.
-const USE_CLAUDE = !!process.env.ANTHROPIC_API_KEY;
-
-let anthropic = null;
-if (USE_CLAUDE) {
-  anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  console.log('  Translation engine: Claude AI (context-aware UPSC/HCS mode)');
-} else {
-  console.log('  Translation engine: Google Translate (EN -> HI Devanagari)');
-  console.log('  Tip: Set ANTHROPIC_API_KEY in .env for smarter UPSC translation');
+// ── Anthropic Claude AI — REQUIRED ───────────────────────────────────────────
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.error('  ERROR: ANTHROPIC_API_KEY is required. Set it in your .env file.');
+  console.error('  Get your key from: console.anthropic.com → API Keys');
+  process.exit(1);
 }
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+console.log('  Translation engine: Claude AI (context-aware UPSC/HCS mode)');
 
 // ── Claude model — use Haiku for speed/cost, Sonnet for best quality ─────────
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
@@ -71,71 +67,33 @@ Your translation rules:
     - Namami Gange = "नमामि गंगे" (do not translate the mission name)
     - IUCN Red List categories must use standard Hindi UPSC terminology
 
+14. CONTEXT-AWARE DISAMBIGUATION — CRITICAL:
+    Many English words have DIFFERENT Hindi translations depending on context.
+    You MUST analyze the surrounding text to choose the correct meaning:
+    - "Mercury" → "बुध" (planet context) vs "पारा" (chemical element context) vs "मर्करी" (Roman god)
+    - "Plant" → "पौधा" (botanical/biology) vs "संयंत्र" (industrial factory)
+    - "Act" → "अधिनियम" (law/legislation) vs "कार्य" (action/deed)
+    - "Motion" → "प्रस्ताव" (parliamentary) vs "गति" (physics/movement)
+    - "Speaker" → "अध्यक्ष" (parliamentary presiding officer) vs "वक्ता" (person speaking)
+    - "House" → "सदन" (parliament) vs "घर" (building)
+    - "Cabinet" → "मंत्रिमंडल" (council of ministers) vs "अलमारी" (furniture)
+    - "Bill" → "विधेयक" (legislation) vs "बिल" (invoice)
+    - "Cell" → "कोशिका" (biology) vs "सेल" (battery) vs "कक्ष" (prison)
+    - "Power" → "शक्ति/सत्ता" (political authority) vs "शक्ति/ऊर्जा" (physics) vs "घात" (math exponent)
+    - "Current" → "विद्युत धारा" (electric) vs "धारा" (ocean current) vs "वर्तमान" (present/ongoing)
+    - "Revolution" → "क्रांति" (political uprising) vs "परिक्रमा" (orbital revolution)
+    - "State" → "राज्य" (political state) vs "अवस्था" (condition/state of matter)
+    - "Charge" → "प्रभार" (administrative duty) vs "शुल्क" (fee) vs "आवेश" (electric charge)
+    - "Bench" → "न्यायपीठ" (judicial) vs "बेंच" (furniture)
+    - "Bar" → "अधिवक्ता संघ" (legal profession) vs "छड़" (rod)
+    - "Deposit" → "जमा" (banking) vs "निक्षेप" (geological/mineral)
+    - "Fold" → "वलन" (geological fold) vs "गुना" (multiplier)
+    - "Division" → "विभाजन" (parliamentary vote) vs "भाग" (math) vs "प्रभाग" (administrative)
+    - "Drift" → "अपवाह/विस्थापन" (continental drift) vs "बहाव" (ocean/wind)
+    - "Scale" → "पैमाना/मापनी" (map/measurement) vs "स्वरमान" (musical)
+    ALWAYS consider context clues like subject keywords, surrounding terminology, and topic.
+
 ${getGlossaryPrompt()}`;
-
-// ─── Abbreviation protection (used for Google Translate path) ─────────────────
-const PROTECTED_ABBREVIATIONS = [
-  'NHRC', 'NITI', 'SEBI', 'NABARD', 'SIDBI', 'AFSPA', 'PMGSY', 'PMAY',
-  'MNREGA', 'NREGA', 'TPDS', 'DRDO', 'BARC', 'CSIR', 'SAARC', 'ASEAN',
-  'BRICS', 'NATO', 'UNSC', 'UNGA', 'ISRO', 'CAG', 'CVC', 'CBI', 'CID',
-  'NCW', 'CIC', 'RTI', 'RTE', 'PPP', 'BOT', 'DBT', 'JAM', 'DTC', 'MPC',
-  'SLR', 'CRR', 'MSP', 'FCI', 'PDS', 'BPL', 'APL', 'AAY', 'EWS',
-  'UPSC', 'SPSC', 'FDI', 'FII', 'FPI', 'GNP', 'NNP', 'GDP', 'GST',
-  'RBI', 'OBC', 'IAS', 'IPS', 'IFS', 'IRS', 'HCS', 'DM', 'SDM', 'BDO',
-  'PIL', 'NGO', 'UPA', 'NDA', 'BJP', 'INC', 'RSS', 'G20', 'G7', 'UN',
-  'PM', 'CM', 'MP', 'MLA', 'MLC', 'SC', 'ST', 'HC', 'ED',
-].sort((a, b) => b.length - a.length);
-
-function protectAbbreviations(text, customAbbrs = []) {
-  const allAbbrs = [...new Set([...customAbbrs, ...PROTECTED_ABBREVIATIONS])];
-  const map = new Map();
-  let result = text;
-  for (const abbr of allAbbrs) {
-    const placeholder = `\u00AB${abbr}\u00BB`;
-    const regex = new RegExp(`\\b${escapeRegex(abbr)}\\b`, 'g');
-    if (regex.test(result)) {
-      result = result.replace(regex, placeholder);
-      map.set(placeholder, abbr);
-    }
-  }
-  return { protected: result, map };
-}
-
-function restoreAbbreviations(text, map) {
-  let result = text;
-  for (const [placeholder, abbr] of map) {
-    result = result.replace(new RegExp(escapeRegex(placeholder), 'g'), abbr);
-    result = result.replace(new RegExp(`«\\s*${escapeRegex(abbr)}\\s*»`, 'gi'), abbr);
-  }
-  return result;
-}
-
-function protectMCQPatterns(text, map) {
-  let result = text;
-  let idx = map.size;
-  result = result.replace(
-    /((?:उत्तर|Answer|Ans)[\s]*[:।]\s*)([A-Ea-e])\b/gi,
-    (match) => { const ph = `«MCQ${idx++}»`; map.set(ph, match); return ph; }
-  );
-  result = result.replace(/\(([a-eA-E])\)/g, (match) => {
-    const ph = `«MCQ${idx++}»`; map.set(ph, match); return ph;
-  });
-  result = result.replace(/(?<![a-zA-Z])([a-eA-E])\)(?=\s|$)/gm, (match) => {
-    const ph = `«MCQ${idx++}»`; map.set(ph, match); return ph;
-  });
-  return result;
-}
-
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function decodeHtmlEntities(str) {
-  return str
-    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
-    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
-}
 
 // ── Claude translation ────────────────────────────────────────────────────────
 /**
@@ -150,12 +108,30 @@ async function translateWithClaude(paragraphs) {
     .map((p, i) => `[${i + 1}] ${p}`)
     .join('\n\n');
 
+  // ── Context-aware disambiguation ──────────────────────────────────────────
+  // Analyze the full text to detect ambiguous terms and their correct meanings
+  const fullText = paragraphs.join(' ');
+  const { disambiguations, detectedSubject } = applyContextDisambiguation(fullText);
+  const disambiguationInstructions = getDisambiguationPrompt(disambiguations);
+
+  // Inject disambiguation context into the system prompt for this batch
+  const systemPrompt = disambiguationInstructions
+    ? UPSC_SYSTEM_PROMPT + disambiguationInstructions
+    : UPSC_SYSTEM_PROMPT;
+
+  if (disambiguations.length > 0) {
+    console.log(`  Context disambiguation: detected subject="${detectedSubject}", ${disambiguations.length} ambiguous terms resolved`);
+    for (const d of disambiguations) {
+      console.log(`    "${d.term}" → "${d.correctHindi}" (${d.domain}, confidence: ${d.confidence})`);
+    }
+  }
+
   const userMsg = `Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output.\n\n${numbered}`;
 
   const response = await anthropic.messages.create({
     model: CLAUDE_MODEL,
     max_tokens: 4096,
-    system: UPSC_SYSTEM_PROMPT,
+    system: systemPrompt,
     messages: [{ role: 'user', content: userMsg }],
   });
 
@@ -181,34 +157,14 @@ async function translateWithClaude(paragraphs) {
   return result.map((t, i) => t || paragraphs[i]); // keep original if Claude missed it
 }
 
-// ── Google Translate path ─────────────────────────────────────────────────────
-async function translateChunkRaw(text, customAbbrs = []) {
-  if (!text.trim()) return text;
-  const { protected: abbProtected, map } = protectAbbreviations(text, customAbbrs);
-  const mcqProtected = protectMCQPatterns(abbProtected, map);
-  const result = await translate(mcqProtected, { from: 'en', to: 'hi' });
-  let translated = decodeHtmlEntities(result.text?.trim() || '');
-  translated = restoreAbbreviations(translated, map);
-  const origTrimmed = text.trim();
-  if (!origTrimmed.startsWith('"') && !origTrimmed.startsWith('\u201c')) {
-    translated = translated.replace(/^[""\u201c\u201d]+|[""\u201c\u201d]+$/g, '').trim();
-  }
-  return translated;
-}
-
 // ── Public API ────────────────────────────────────────────────────────────────
 /**
  * Translate a single text chunk (used by translateAllChunks path).
  */
-export async function translateChunk(text, chunkIndex, totalChunks, onProgress, customAbbrs = []) {
+export async function translateChunk(text, chunkIndex, totalChunks, onProgress) {
   try {
-    let translatedText;
-    if (USE_CLAUDE) {
-      const results = await translateWithClaude([text]);
-      translatedText = results[0] || text;
-    } else {
-      translatedText = await translateChunkRaw(text, customAbbrs);
-    }
+    const results = await translateWithClaude([text]);
+    let translatedText = results[0] || text;
     translatedText = applyGlossaryPostProcessing(translatedText, text);
     translatedText = applyHindiCorrections(translatedText);
 
@@ -231,7 +187,6 @@ export async function translateChunk(text, chunkIndex, totalChunks, onProgress, 
  * Translate all chunks sequentially with progress reporting.
  */
 export async function translateAllChunks(chunks, onProgress, bookContext = '') {
-  const customAbbrs = parseCustomAbbreviations(bookContext);
   const translated = [];
 
   for (let i = 0; i < chunks.length; i++) {
@@ -244,11 +199,11 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
         message: `Translating chunk ${i + 1} of ${chunks.length}...`,
       });
     }
-    const result = await translateChunk(chunks[i], i, chunks.length, onProgress, customAbbrs);
+    const result = await translateChunk(chunks[i], i, chunks.length, onProgress);
     translated.push(result);
 
     if (i < chunks.length - 1) {
-      await new Promise((r) => setTimeout(r, USE_CLAUDE ? 200 : 500));
+      await new Promise((r) => setTimeout(r, 200));
     }
   }
 
@@ -260,12 +215,7 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
  * Used for DOCX clone-and-replace.
  */
 export async function translateParagraphs(paragraphs, bookContext = '', onProgress) {
-  const customAbbrs = parseCustomAbbreviations(bookContext);
-
-  if (USE_CLAUDE) {
-    return translateParagraphsWithClaude(paragraphs, onProgress);
-  }
-  return translateParagraphsWithGoogle(paragraphs, customAbbrs, onProgress);
+  return translateParagraphsWithClaude(paragraphs, onProgress);
 }
 
 // ── Claude paragraph translation (batched) ────────────────────────────────────
@@ -314,88 +264,6 @@ async function translateParagraphsWithClaude(paragraphs, onProgress) {
 
     if (b < totalBatches - 1) {
       await new Promise((r) => setTimeout(r, 300));
-    }
-  }
-
-  return translated;
-}
-
-// ── Google Translate paragraph translation (batched) ─────────────────────────
-async function translateParagraphsWithGoogle(paragraphs, customAbbrs, onProgress) {
-  const BATCH_SIZE = 10;
-  const SEPARATOR = '\n[PARA_SEP]\n';
-  const translated = [];
-  const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
-
-  for (let b = 0; b < totalBatches; b++) {
-    const start = b * BATCH_SIZE;
-    const batch = paragraphs.slice(start, start + BATCH_SIZE);
-
-    if (onProgress) {
-      await onProgress({
-        chunk: b + 1,
-        totalChunks: totalBatches,
-        percent: Math.round((b / totalBatches) * 100),
-        status: 'translating',
-        message: `Translating paragraphs ${start + 1}–${Math.min(start + BATCH_SIZE, paragraphs.length)} of ${paragraphs.length}...`,
-      });
-    }
-
-    try {
-      const joined = batch.join(SEPARATOR);
-      const { protected: abbJoined, map } = protectAbbreviations(joined, customAbbrs);
-      const safeJoined = protectMCQPatterns(abbJoined, map);
-
-      const result = await translate(safeJoined, { from: 'en', to: 'hi' });
-      let resultText = decodeHtmlEntities(result.text || '');
-      resultText = restoreAbbreviations(resultText, map);
-
-      const parts = resultText.split(/\n?\[?PARA_SEP\]?\n?/);
-
-      if (parts.length === batch.length) {
-        for (let i = 0; i < parts.length; i++) {
-          let t = parts[i].trim();
-          if (!batch[i].trim().startsWith('"')) {
-            t = t.replace(/^[""\u201c\u201d]+|[""\u201c\u201d]+$/g, '').trim();
-          }
-          t = applyGlossaryPostProcessing(t, batch[i]);
-          t = applyHindiCorrections(t);
-          translated.push(t);
-        }
-      } else {
-        // Separator mangled — translate individually
-        console.warn(`Batch ${b + 1}: split mismatch. Translating individually.`);
-        for (const para of batch) {
-          try {
-            const { protected: abbPara, map: pMap } = protectAbbreviations(para, customAbbrs);
-            const safePara = protectMCQPatterns(abbPara, pMap);
-            const r = await translate(safePara, { from: 'en', to: 'hi' });
-            let t = restoreAbbreviations(decodeHtmlEntities((r.text || '').trim()), pMap);
-            t = applyGlossaryPostProcessing(t, para);
-            t = applyHindiCorrections(t);
-            translated.push(t);
-          } catch { translated.push(para); }
-          await new Promise((r) => setTimeout(r, 200));
-        }
-      }
-    } catch (err) {
-      console.warn(`Batch ${b + 1} failed: ${err.message}. Translating individually.`);
-      for (const para of batch) {
-        try {
-          const { protected: abbPara, map: pMap } = protectAbbreviations(para, customAbbrs);
-          const safePara = protectMCQPatterns(abbPara, pMap);
-          const r = await translate(safePara, { from: 'en', to: 'hi' });
-          let t = restoreAbbreviations(decodeHtmlEntities((r.text || '').trim()), pMap);
-          t = applyGlossaryPostProcessing(t, para);
-          t = applyHindiCorrections(t);
-          translated.push(t);
-        } catch { translated.push(para); }
-        await new Promise((r) => setTimeout(r, 200));
-      }
-    }
-
-    if (b < totalBatches - 1) {
-      await new Promise((r) => setTimeout(r, 400));
     }
   }
 
