@@ -152,6 +152,10 @@ async function translateWithGemini(paragraphs) {
   const model = genAI.getGenerativeModel({
     model: GEMINI_MODEL,
     systemInstruction: UPSC_SYSTEM_PROMPT,
+    generationConfig: {
+      temperature: 0.3,  // Low temp for consistent translation
+      thinkingConfig: { thinkingBudget: 0 },  // Disable thinking for speed
+    },
   });
 
   // Number each paragraph so we can split the output reliably
@@ -240,9 +244,7 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
     const result = await translateChunk(chunks[i], i, chunks.length, onProgress);
     translated.push(result);
 
-    if (i < chunks.length - 1) {
-      await new Promise((r) => setTimeout(r, 200));
-    }
+    // No delay between chunks — Gemini has generous rate limits
   }
 
   return translated.join('\n\n');
@@ -258,7 +260,7 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 
 // ── Gemini paragraph translation (batched) ───────────────────────────────────
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  const BATCH_SIZE = 20;
+  const BATCH_SIZE = 40; // Gemini supports large context — bigger batches = fewer API calls
   const translated = [];
   const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
 
@@ -300,9 +302,7 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
       translated.push(...batch);
     }
 
-    if (b < totalBatches - 1) {
-      await new Promise((r) => setTimeout(r, 300));
-    }
+    // No delay between batches — Gemini has generous rate limits
   }
 
   return translated;
