@@ -13,7 +13,7 @@ const genAI = process.env.GEMINI_API_KEY
   : null;
 if (genAI) console.log('  Translation engine: Google Gemini (context-aware UPSC/HCS mode)');
 
-// ── Gemini model — gemini-2.0-flash for speed, gemini-2.5-pro for quality ────
+// ── Gemini model ─────────────────────────────────────────────────────────────
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
@@ -48,68 +48,27 @@ Your translation rules:
 6. ANSWER KEYS: "Answer: (a)" or "उत्तर: (b)" — ALWAYS use full parentheses around the letter. NEVER write "उत्तर: c)" — always "(c)".
 7. NUMBERS & DATES: Keep all numbers, years, percentages, and dates in their original form.
 8. EXAMINATION LANGUAGE: Use शुद्ध हिंदी (Shudh Hindi) — formal government Hindi, NOT colloquial Hindi. The tone must match official UPSC/HCS question papers.
-9. OUTPUT: Return ONLY the translated Hindi text. No explanations, no notes, no English words except abbreviations.
-
-15. SINGLE ENGLISH LETTERS — ABSOLUTE RULES (NEVER VIOLATE):
-    When single English letters (A, B, C, D, E, F, G, P, Q, R, S, T, U, V, W, X, Y, Z) are used as:
-    - LABELS in match-the-following tables (e.g., "A - 3, B - 2, C - 4, D - 1")
-    - COLUMN/ROW HEADERS in tables or lists
-    - PERSON/VARIABLE NAMES (e.g., "A and B start a business", "P walks east")
-    - CODED ANSWER KEYS (e.g., "A B C D / 3 2 4 1")
-    - ARRANGEMENT/SEQUENCE markers (e.g., "M, N, O, P, Q sit in a row")
-    - ASSERTION-REASON labels: (A) for Assertion, (R) for Reason
-    They MUST remain as English letters. NEVER transliterate them to Hindi:
-    - WRONG: ए, बी, सी, डी, ई, एफ, जी, पी, क्यू, आर, एस, टी
-    - CORRECT: A, B, C, D, E, F, G, P, Q, R, S, T
-    - WRONG: "ए-3, बी-2, सी-4, डी-1" → CORRECT: "A-3, B-2, C-4, D-1"
-    - WRONG: "ए और बी एक व्यापार शुरू करते हैं" → CORRECT: "A और B एक व्यापार शुरू करते हैं"
-
-16. MATCH-THE-FOLLOWING / कूट FORMAT:
-    In match-the-following questions, the "कूट:" (code) section has answer options like:
-    "     A  B  C  D
-    (a)  3  2  4  1
-    (b)  2  3  1  4"
-    The column headers A, B, C, D MUST stay in English. The row labels (a), (b), (c), (d) MUST stay in English.
-
-17. ROMAN NUMERALS: Keep I, II, III, IV etc. as-is. NEVER translate "I" as "मैं" when it's a Roman numeral.
-
-18. PM/AM TIME: Keep "PM" and "AM" as-is in time contexts (e.g., "5 PM" stays "5 PM", NOT "5 अपराह्न" or "5 पीएम").
-19. NO DUPLICATE OPTIONS: For MCQ questions, output each option ONLY ONCE on its OWN separate line. NEVER put options inline within the question text AND also on separate lines. The correct format is:
-   Question text here?
-   (a) Option 1
-   (b) Option 2
-   (c) Option 3
-   (d) Option 4
-   WRONG format (options inline + repeated on separate lines):
-   Question text here? (a) Option 1 (b) Option 2 (c) Option 3 (d) Option 4
-   (a) Option 1
-   (b) Option 2
-   ...
-
+9. OUTPUT: Return ONLY the translated Hindi text. No explanations, no notes, no meta-commentary. TRANSLATE EVERYTHING — do NOT leave any English sentences, phrases, or passages untranslated. The ONLY English allowed in output is: abbreviations (GDP, RBI, etc.), option labels (a)(b)(c)(d), single letters used as variables (A, B, C, D), mathematical formulas, and proper nouns that are standard abbreviations.
 10. GEOLOGY — CRITICAL RULES (common exam errors to avoid):
     - "lava" MUST always be "लावा". NEVER use "लाभ" (which means profit/benefit). This is the most common error.
     - Basaltic lava = "बेसाल्टिक लावा", Rhyolitic lava = "राइओलिटिक लावा", Andesitic lava = "एंडेसिटिक लावा"
     - magma = "मैग्मा", viscosity = "श्यानता", silica = "सिलिका", eruption = "विस्फोट"
     - Intrusive igneous bodies: Laccolith = "लैकोलिथ" (dome with flat base), Lopolith = "लोपोलिथ" (saucer-shaped), Phacolith = "फैकोलिथ" (lens at anticline/syncline), Batholith = "बैथोलिथ" (large granitic mass)
     - Cave formations: stalactite = "स्टैलेक्टाइट" (hangs from ceiling), stalagmite = "स्टैलेग्माइट" (rises from floor)
-
 11. PLATE TECTONICS — CRITICAL RULES:
     - "convergent" = "अभिसारी", "divergent" = "अपसारी" — do NOT swap these.
     - Pacific Ring of Fire is associated with CONVERGENT (अभिसारी) plate boundaries, NOT divergent.
     - Subduction zone = "सबडक्शन ज़ोन", anticline = "अपनति", syncline = "अभिनति"
-
 12. IGMDP MISSILES — MUST MATCH EXACTLY:
     - Trishul = "त्रिशूल" — Surface-to-AIR missile (सतह से वायु मिसाइल), short-range
     - Prithvi = "पृथ्वी" — Surface-to-SURFACE missile (सतह से सतह मिसाइल)
     - Agni = "अग्नि" — Surface-to-surface ballistic missile (सतह से सतह बैलिस्टिक मिसाइल)
     - NAG = "नाग" — Anti-tank missile (टैंक-रोधी मिसाइल)
     - Akash = "आकाश" — Surface-to-air missile (सतह से वायु मिसाइल)
-
 13. ENVIRONMENT & WILDLIFE:
     - Critically Endangered = "गंभीर रूप से संकटग्रस्त", Endangered = "संकटग्रस्त", Vulnerable = "असुरक्षित"
     - Namami Gange = "नमामि गंगे" (do not translate the mission name)
     - IUCN Red List categories must use standard Hindi UPSC terminology
-
 14. CONTEXT-AWARE DISAMBIGUATION — CRITICAL:
     Many English words have DIFFERENT Hindi translations depending on context.
     You MUST analyze the surrounding text to choose the correct meaning:
@@ -137,15 +96,56 @@ Your translation rules:
     - "Predictor" → "पूर्वानुमानकर्ता" (statistical/research) — NEVER "भविष्यअध्यक्ष" (that means future+president)
     - "Elasticity" (economics) → "लोच" — NEVER "अस्थिरता" (that means instability)
     ALWAYS consider context clues like subject keywords, surrounding terminology, and topic.
+15. SINGLE ENGLISH LETTERS — ABSOLUTE RULES (NEVER VIOLATE):
+    When single English letters (A, B, C, D, E, F, G, P, Q, R, S, T, U, V, W, X, Y, Z) are used as:
+    - LABELS in match-the-following tables (e.g., "A - 3, B - 2, C - 4, D - 1")
+    - COLUMN/ROW HEADERS in tables or lists
+    - PERSON/VARIABLE NAMES (e.g., "A and B start a business", "P walks east")
+    - CODED ANSWER KEYS (e.g., "A B C D / 3 2 4 1")
+    - ARRANGEMENT/SEQUENCE markers (e.g., "M, N, O, P, Q sit in a row")
+    - ASSERTION-REASON labels: (A) for Assertion, (R) for Reason
+    They MUST remain as English letters. NEVER transliterate them to Hindi:
+    - WRONG: ए, बी, सी, डी, ई, एफ, जी, पी, क्यू, आर, एस, टी
+    - CORRECT: A, B, C, D, E, F, G, P, Q, R, S, T
+    - WRONG: "ए-3, बी-2, सी-4, डी-1" → CORRECT: "A-3, B-2, C-4, D-1"
+    - WRONG: "ए और बी एक व्यापार शुरू करते हैं" → CORRECT: "A और B एक व्यापार शुरू करते हैं"
+16. MATCH-THE-FOLLOWING / कूट FORMAT:
+    In match-the-following questions, the "कूट:" (code) section has answer options like:
+    "     A  B  C  D
+    (a)  3  2  4  1
+    (b)  2  3  1  4"
+    The column headers A, B, C, D MUST stay in English. The row labels (a), (b), (c), (d) MUST stay in English.
+17. ROMAN NUMERALS: Keep I, II, III, IV etc. as-is. NEVER translate "I" as "मैं" when it's a Roman numeral.
+18. PM/AM TIME: Keep "PM" and "AM" as-is in time contexts (e.g., "5 PM" stays "5 PM", NOT "5 अपराह्न" or "5 पीएम").
+19. NO DUPLICATE OPTIONS: For MCQ questions, output each option ONLY ONCE on its OWN separate line. NEVER put options inline within the question AND also on separate lines.
+20. TRANSLATE ALL ENGLISH TEXT: When the solution/explanation references or quotes an English passage, you MUST translate those quoted English sentences into Hindi. NEVER copy-paste English sentences from the original passage. Even if the explanation says 'the line says "X Y Z"', translate "X Y Z" into Hindi. The ENTIRE output must be in Hindi (except abbreviations and math formulas).
 
 ${getGlossaryPrompt()}`;
 
 // ── Gemini translation ───────────────────────────────────────────────────────
+
+/** Check if text has significant untranslated English content */
+function hasUntranslatedEnglish(text, original) {
+  if (!text || !original) return false;
+  // Skip if it's a math formula or symbol-heavy line
+  if (/^[\d\s\(\)\.\-\+\*\/=×÷%<>a-dA-D,;:?!]+$/.test(text.trim())) return false;
+  const engWords = (text.match(/\b[A-Za-z]{4,}\b/g) || []).filter(w =>
+    !/^(UPSC|IAS|HCS|GDP|RBI|GST|SEBI|ISRO|UN|NATO|CRR|SLR|FDI|PIL|CAG|ATM|EMI|DNA|RNA|NOTA|NCL|CSR|IMF|NGO|NRI|UNESCO|UNICEF|WHO|FIFA|BRICS|IGMDP|OMR|CSAT|PCS|pH|UV|AM|PM|MCQ|DOCX|PDF)$/i.test(w)
+  );
+  // If more than 40% of content is English words, it's likely untranslated
+  if (engWords.length >= 5) {
+    const engCharCount = engWords.join('').length;
+    const totalChars = text.replace(/\s/g, '').length;
+    return engCharCount / totalChars > 0.3;
+  }
+  return false;
+}
+
 /**
  * Translate a batch of paragraphs using Gemini.
  * Sends them as a numbered list so Gemini returns them in the same order.
  */
-async function translateWithGemini(paragraphs) {
+async function translateWithGemini(paragraphs, retryCount = 0) {
   if (paragraphs.length === 0) return [];
   if (!genAI) throw new Error('GEMINI_API_KEY is not configured. Set it in environment variables.');
 
@@ -153,8 +153,8 @@ async function translateWithGemini(paragraphs) {
     model: GEMINI_MODEL,
     systemInstruction: UPSC_SYSTEM_PROMPT,
     generationConfig: {
-      temperature: 0.3,  // Low temp for consistent translation
-      thinkingConfig: { thinkingBudget: 0 },  // Disable thinking for speed
+      temperature: 0.2,
+      thinkingConfig: { thinkingBudget: 0 },
     },
   });
 
@@ -168,14 +168,11 @@ async function translateWithGemini(paragraphs) {
   const { disambiguations, detectedSubject } = applyContextDisambiguation(fullText);
   const disambiguationInstructions = getDisambiguationPrompt(disambiguations);
 
-  if (disambiguations.length > 0) {
+  if (disambiguations.length > 0 && retryCount === 0) {
     console.log(`  Context disambiguation: detected subject="${detectedSubject}", ${disambiguations.length} ambiguous terms resolved`);
-    for (const d of disambiguations) {
-      console.log(`    "${d.term}" → "${d.correctHindi}" (${d.domain}, confidence: ${d.confidence})`);
-    }
   }
 
-  const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output.\n\n${numbered}`;
+  const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output. TRANSLATE EVERYTHING INTO HINDI — do NOT leave any English text untranslated except abbreviations and math formulas.\n\n${numbered}`;
 
   const result = await model.generateContent(userMsg);
   const rawOutput = result.response.text();
@@ -190,13 +187,36 @@ async function translateWithGemini(paragraphs) {
     }
   }
 
-  // Fallback: if Gemini didn't number properly, return as-is split by double newline
+  // Fallback: if Gemini didn't number properly for single paragraph
   const hasEmpty = parsed.some((r, i) => !r && paragraphs[i].trim());
   if (hasEmpty && paragraphs.length === 1) {
     return [rawOutput.trim()];
   }
 
-  return parsed.map((t, i) => t || paragraphs[i]); // keep original if missed
+  // ── Retry logic: individually translate any missed/untranslated paragraphs ──
+  const needsRetry = [];
+  for (let i = 0; i < parsed.length; i++) {
+    if (!paragraphs[i].trim()) continue;
+    if (!parsed[i] || hasUntranslatedEnglish(parsed[i], paragraphs[i])) {
+      needsRetry.push(i);
+    }
+  }
+
+  if (needsRetry.length > 0 && retryCount < 2) {
+    console.log(`  Retrying ${needsRetry.length} untranslated paragraphs individually (attempt ${retryCount + 1})...`);
+    for (const idx of needsRetry) {
+      try {
+        const singleResult = await translateWithGemini([paragraphs[idx]], retryCount + 1);
+        if (singleResult[0] && !hasUntranslatedEnglish(singleResult[0], paragraphs[idx])) {
+          parsed[idx] = singleResult[0];
+        }
+      } catch (e) {
+        console.warn(`  Retry failed for paragraph ${idx}: ${e.message}`);
+      }
+    }
+  }
+
+  return parsed.map((t, i) => t || paragraphs[i]); // keep original as last resort
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -243,8 +263,6 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
     }
     const result = await translateChunk(chunks[i], i, chunks.length, onProgress);
     translated.push(result);
-
-    // No delay between chunks — Gemini has generous rate limits
   }
 
   return translated.join('\n\n');
@@ -260,7 +278,8 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 
 // ── Gemini paragraph translation (batched) ───────────────────────────────────
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  const BATCH_SIZE = 40; // Gemini supports large context — bigger batches = fewer API calls
+  // Smaller batches = more reliable 1:1 mapping and fewer missed paragraphs
+  const BATCH_SIZE = 15;
   const translated = [];
   const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
 
@@ -298,11 +317,22 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
       }
       translated.push(...batchResult);
     } catch (err) {
-      console.warn(`Gemini batch ${b + 1} failed: ${err.message}. Keeping originals.`);
-      translated.push(...batch);
+      console.warn(`Gemini batch ${b + 1} failed: ${err.message}. Retrying individually...`);
+      // Instead of keeping originals, retry each paragraph individually
+      for (let i = 0; i < batch.length; i++) {
+        if (!batch[i].trim()) { translated.push(''); continue; }
+        try {
+          const results = await translateWithGemini([batch[i]]);
+          let t = results[0] || batch[i];
+          t = applyGlossaryPostProcessing(t, batch[i]);
+          t = applyHindiCorrections(t);
+          translated.push(t);
+        } catch (retryErr) {
+          console.warn(`  Individual retry failed for paragraph ${start + i}: ${retryErr.message}`);
+          translated.push(batch[i]); // last resort: keep original
+        }
+      }
     }
-
-    // No delay between batches — Gemini has generous rate limits
   }
 
   return translated;
