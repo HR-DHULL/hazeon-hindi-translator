@@ -784,6 +784,66 @@ export const HINDI_CORRECTIONS = [
 ];
 
 /**
+ * Fix missing MCQ option labels.
+ * Claude sometimes drops (a)(b)(c)(d) labels entirely, leaving bare option text.
+ * Detects groups of 4 unlabeled lines before an "उत्तर:" answer line and adds labels.
+ */
+function restoreMissingOptionLabels(text) {
+  if (!text) return text;
+  const lines = text.split('\n');
+  const result = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    // Look for answer lines
+    if (lines[i].match(/उत्तर\s*[:：]/)) {
+      // Scan backwards for unlabeled option lines (skip empty lines)
+      const optionCandidates = [];
+      let j = i - 1;
+      while (j >= 0 && optionCandidates.length < 4) {
+        const trimmed = lines[j].trim();
+        if (trimmed === '') {
+          j--;
+          continue;
+        }
+        // Already has option label — stop
+        if (trimmed.match(/^\([a-d]\)/)) break;
+        // Looks like a question text or heading (too long or has question patterns)
+        if (trimmed.match(/^\d+[\.\)]/) || trimmed.match(/^निम्नलिखित|^कथन|^कूट|^नीचे दिए/)) break;
+        optionCandidates.unshift({ index: j, text: trimmed });
+        j--;
+      }
+
+      // If we found exactly 4 consecutive unlabeled option-like lines, add labels
+      if (optionCandidates.length === 4) {
+        const labels = ['(a)', '(b)', '(c)', '(d)'];
+        for (let k = 0; k < 4; k++) {
+          const idx = optionCandidates[k].index;
+          const line = lines[idx];
+          // Don't re-label if already labeled
+          if (!line.trim().match(/^\([a-d]\)/)) {
+            const leadingSpace = line.match(/^(\s*)/)[1];
+            lines[idx] = leadingSpace + labels[k] + ' ' + line.trim();
+          }
+        }
+      }
+    }
+    // Don't push here — we modify in-place and join at the end
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Fix broken answer format: "उत्तर: c)" → "उत्तर: (c)"
+ * Claude sometimes drops the opening parenthesis in answer lines.
+ */
+function fixAnswerFormat(text) {
+  if (!text) return text;
+  // Fix "उत्तर: c)" → "उत्तर: (c)" and similar
+  return text.replace(/(उत्तर\s*[:：]\s*)([a-dA-D])\)/g, '$1($2)');
+}
+
+/**
  * Fix corrupted MCQ option labels.
  * Claude sometimes translates (a)/(b)/(c)/(d) into Hindi transliterations
  * like «एमसीक्यू1», "MCQ0", "MCQ1", etc. This restores them.
@@ -997,6 +1057,12 @@ export function applyHindiCorrections(hindiText) {
 
   // Fix MCQ label corruption first (एमसीक्यू → (a)/(b)/(c)/(d))
   result = fixMCQLabels(result);
+
+  // Restore missing option labels (Claude sometimes drops (a)(b)(c)(d) entirely)
+  result = restoreMissingOptionLabels(result);
+
+  // Fix broken answer format: "उत्तर: c)" → "उत्तर: (c)"
+  result = fixAnswerFormat(result);
 
   // Fix single English letter transliterations (ए→A, बी→B, etc.)
   result = fixLetterTransliteration(result);

@@ -33,16 +33,19 @@ Your translation rules:
    - "Act" (law) = अधिनियम (NOT कार्य)
 4. ABBREVIATIONS: Never translate abbreviations like UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, UN, NATO, CRR, SLR, FDI, PIL, CAG, etc. Keep them exactly as-is in English.
 5. MCQ FORMAT — ABSOLUTE RULES (NEVER VIOLATE):
+   - EVERY MCQ option MUST have its label. NEVER drop or remove option labels.
    - Option labels (a), (b), (c), (d) MUST stay EXACTLY as "(a)", "(b)", "(c)", "(d)" in English
    - NEVER convert them to Hindi: NO (ए), NO (बी), NO एमसीक्यू, NO MCQ1/MCQ2, NO «एमसीक्यू»
-   - NEVER remove or merge option labels — each option MUST start on its own line
+   - NEVER remove or merge option labels — each option MUST start with its label on its own line
+   - If the original has "(a) Only 1 and 2" you MUST output "(a) केवल 1 और 2" — KEEP the "(a)" prefix!
    - If the original has "(a) 12 (b) 8 (c) 16 (d) 24" keep them exactly: "(a) 12\n(b) 8\n(c) 16\n(d) 24"
+   - Even if the original uses different label styles (a., A., 1., (i)), normalize them to "(a)", "(b)", "(c)", "(d)"
    - Use "उपर्युक्त" (NOT उपरोक्त) for "above-mentioned"
    - Use "कूट" (NOT कोड) for "code" in MCQ instructions
    - Use formal imperative: "कीजिए" (NOT करें), "चुनिए" (NOT चुनें)
    - Standard pattern: "निम्नलिखित कथनों पर विचार कीजिए"
    - Standard pattern: "नीचे दिए गए कूट का प्रयोग कर सही उत्तर चुनिए"
-6. ANSWER KEYS: Lines like "Answer: A" or "उत्तर: B" must stay intact with the original letter.
+6. ANSWER KEYS: "Answer: (a)" or "उत्तर: (b)" — ALWAYS use full parentheses around the letter. NEVER write "उत्तर: c)" — always "(c)".
 7. NUMBERS & DATES: Keep all numbers, years, percentages, and dates in their original form.
 8. EXAMINATION LANGUAGE: Use शुद्ध हिंदी (Shudh Hindi) — formal government Hindi, NOT colloquial Hindi. The tone must match official UPSC/HCS question papers.
 9. OUTPUT: Return ONLY the translated Hindi text. No explanations, no notes, no English words except abbreviations.
