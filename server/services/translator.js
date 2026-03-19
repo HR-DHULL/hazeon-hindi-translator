@@ -46,6 +46,31 @@ Your translation rules:
 8. EXAMINATION LANGUAGE: Use शुद्ध हिंदी (Shudh Hindi) — formal government Hindi, NOT colloquial Hindi. The tone must match official UPSC/HCS question papers.
 9. OUTPUT: Return ONLY the translated Hindi text. No explanations, no notes, no English words except abbreviations.
 
+15. SINGLE ENGLISH LETTERS — ABSOLUTE RULES (NEVER VIOLATE):
+    When single English letters (A, B, C, D, E, F, G, P, Q, R, S, T, U, V, W, X, Y, Z) are used as:
+    - LABELS in match-the-following tables (e.g., "A - 3, B - 2, C - 4, D - 1")
+    - COLUMN/ROW HEADERS in tables or lists
+    - PERSON/VARIABLE NAMES (e.g., "A and B start a business", "P walks east")
+    - CODED ANSWER KEYS (e.g., "A B C D / 3 2 4 1")
+    - ARRANGEMENT/SEQUENCE markers (e.g., "M, N, O, P, Q sit in a row")
+    - ASSERTION-REASON labels: (A) for Assertion, (R) for Reason
+    They MUST remain as English letters. NEVER transliterate them to Hindi:
+    - WRONG: ए, बी, सी, डी, ई, एफ, जी, पी, क्यू, आर, एस, टी
+    - CORRECT: A, B, C, D, E, F, G, P, Q, R, S, T
+    - WRONG: "ए-3, बी-2, सी-4, डी-1" → CORRECT: "A-3, B-2, C-4, D-1"
+    - WRONG: "ए और बी एक व्यापार शुरू करते हैं" → CORRECT: "A और B एक व्यापार शुरू करते हैं"
+
+16. MATCH-THE-FOLLOWING / कूट FORMAT:
+    In match-the-following questions, the "कूट:" (code) section has answer options like:
+    "     A  B  C  D
+    (a)  3  2  4  1
+    (b)  2  3  1  4"
+    The column headers A, B, C, D MUST stay in English. The row labels (a), (b), (c), (d) MUST stay in English.
+
+17. ROMAN NUMERALS: Keep I, II, III, IV etc. as-is. NEVER translate "I" as "मैं" when it's a Roman numeral.
+
+18. PM/AM TIME: Keep "PM" and "AM" as-is in time contexts (e.g., "5 PM" stays "5 PM", NOT "5 अपराह्न" or "5 पीएम").
+
 10. GEOLOGY — CRITICAL RULES (common exam errors to avoid):
     - "lava" MUST always be "लावा". NEVER use "लाभ" (which means profit/benefit). This is the most common error.
     - Basaltic lava = "बेसाल्टिक लावा", Rhyolitic lava = "राइओलिटिक लावा", Andesitic lava = "एंडेसिटिक लावा"

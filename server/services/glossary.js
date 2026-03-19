@@ -821,6 +821,173 @@ function fixMCQLabels(text) {
 }
 
 /**
+ * Fix single English letter transliteration in match-the-following, tables,
+ * person/variable names, coded answers, arrangement problems, and assertion-reason.
+ *
+ * Categories fixed:
+ * - Match-the-following कूट: ए-3, बी-2 → A-3, B-2
+ * - Person/variable labels: ए और बी → A और B
+ * - Coded answer keys: ए बी सी डी → A B C D
+ * - Arrangement sequences: एम, एन, ओ, पी, क्यू → M, N, O, P, Q
+ * - Assertion (A) / Reason (R) labels
+ * - Roman numeral I mistranslated as "मैं"
+ * - Q transliterated as "प्र" or "प्रश्न" in labels
+ * - PM/AM time transliteration
+ */
+function fixLetterTransliteration(text) {
+  if (!text) return text;
+  let result = text;
+
+  // ── Hindi transliteration → English letter mapping ──────────────────────────
+  const hindiToEnglish = {
+    'ए': 'A', 'बी': 'B', 'सी': 'C', 'डी': 'D', 'ई': 'E',
+    'एफ': 'F', 'जी': 'G', 'एच': 'H', 'आई': 'I', 'जे': 'J',
+    'के': 'K', 'एल': 'L', 'एम': 'M', 'एन': 'N', 'ओ': 'O',
+    'पी': 'P', 'क्यू': 'Q', 'आर': 'R', 'एस': 'S', 'टी': 'T',
+    'यू': 'U', 'वी': 'V', 'डब्ल्यू': 'W', 'एक्स': 'X', 'वाई': 'Y',
+    'ज़ेड': 'Z', 'ज़ी': 'Z',
+  };
+
+  // Sort entries longest-first to prevent partial matching (एम before ए, etc.)
+  const sortedEntries = Object.entries(hindiToEnglish).sort((a, b) => b[0].length - a[0].length);
+
+  // ── 1. Fix कूट (code) section: match-the-following answer grids ─────────────
+  // Pattern: "ए  बी  सी  डी" as column headers or "ए-3, बी-2, सी-4, डी-1"
+  // Look for lines with कूट nearby and fix letter patterns
+
+  // Fix "ए-N, बी-N, सी-N, डी-N" pattern (with dash/hyphen + number)
+  for (const [hindi, english] of sortedEntries) {
+    // Letter followed by dash/hyphen and a number: ए-3 → A-3
+    const dashPattern = new RegExp(`${hindi}\\s*[-–—]\\s*(\\d)`, 'g');
+    result = result.replace(dashPattern, `${english}-$1`);
+
+    // Letter followed by space and number in table grid: ए  3 → A  3
+    // Only when it's clearly a table pattern (multiple letter-number pairs nearby)
+    const spaceNumPattern = new RegExp(`${hindi}(\\s{2,})(\\d)`, 'g');
+    result = result.replace(spaceNumPattern, `${english}$1$2`);
+  }
+
+  // ── 2. Fix standalone letter labels in parentheses ─────────────────────────
+  // (ए) → (A), (बी) → (B), (आर) → (R) — for assertion/reason and other labels
+  for (const [hindi, english] of sortedEntries) {
+    const parenPattern = new RegExp(`\\(${hindi}\\)`, 'g');
+    result = result.replace(parenPattern, `(${english})`);
+  }
+
+  // ── 3. Fix person/variable names: "ए और बी" → "A और B" ─────────────────────
+  // Pattern: Hindi letter + और/or/व + Hindi letter (person name context)
+  for (const [hindi1, eng1] of sortedEntries) {
+    for (const [hindi2, eng2] of sortedEntries) {
+      const andPattern = new RegExp(`${hindi1}\\s+(और|व|एवं|तथा)\\s+${hindi2}`, 'g');
+      result = result.replace(andPattern, `${eng1} $1 ${eng2}`);
+    }
+  }
+
+  // ── 4. Fix comma-separated letter sequences ─────────────────────────────────
+  // "एम, एन, ओ, पी, क्यू" → "M, N, O, P, Q"
+  // Match 3+ consecutive Hindi letters separated by commas
+  // Sort longest-first to prevent partial matches (एम before ए, एफ before ए, etc.)
+  const hindiLetters = Object.keys(hindiToEnglish).sort((a, b) => b.length - a.length);
+  const hindiLetterGroup = hindiLetters.join('|');
+  const seqPattern = new RegExp(
+    `(${hindiLetterGroup})(?:\\s*,\\s*(${hindiLetterGroup})){2,}`,
+    'g'
+  );
+  result = result.replace(seqPattern, (match) => {
+    return match.replace(new RegExp(hindiLetterGroup, 'g'), (letter) => {
+      return hindiToEnglish[letter] || letter;
+    });
+  });
+
+  // ── 5. Fix column header rows in tables ─────────────────────────────────────
+  // "     ए  बी  सी  डी" → "     A  B  C  D" (tab/space separated letters)
+  const headerPattern = new RegExp(
+    `^(\\s*)(${hindiLetterGroup})(\\s{2,})(${hindiLetterGroup})(\\s{2,})(${hindiLetterGroup})(\\s{2,})(${hindiLetterGroup})\\s*$`,
+    'gm'
+  );
+  result = result.replace(headerPattern, (match, prefix, l1, s1, l2, s2, l3, s3, l4) => {
+    return prefix +
+      (hindiToEnglish[l1] || l1) + s1 +
+      (hindiToEnglish[l2] || l2) + s2 +
+      (hindiToEnglish[l3] || l3) + s3 +
+      (hindiToEnglish[l4] || l4);
+  });
+
+  // ── 6. Fix coded answer strings like "आरएफसीपीसी" ──────────────────────────
+  // Multi-letter Hindi transliterations glued together: आरएफसीपीसी → RFCPC
+  // Parse greedily using longest-match approach
+  const sortedHindiLetters = Object.keys(hindiToEnglish).sort((a, b) => b.length - a.length);
+
+  function tryParseGluedLetters(str) {
+    const letters = [];
+    let pos = 0;
+    while (pos < str.length) {
+      let matched = false;
+      for (const hindi of sortedHindiLetters) {
+        if (str.startsWith(hindi, pos)) {
+          letters.push(hindiToEnglish[hindi]);
+          pos += hindi.length;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) return null; // not a pure letter sequence
+    }
+    return letters.length >= 3 ? letters.join('') : null;
+  }
+
+  // Match runs of Devanagari characters that could be glued letter transliterations
+  result = result.replace(/[\u0900-\u097F]{4,}/g, (match) => {
+    const parsed = tryParseGluedLetters(match);
+    return parsed || match;
+  });
+
+  // ── 7. Fix Roman numeral I → "मैं" ─────────────────────────────────────────
+  // "मैं" means "I" (pronoun), but in UPSC context it's usually Roman numeral I
+  // Note: \b doesn't work with Devanagari, so use lookaheads/lookbehinds or explicit boundaries
+  // Fix patterns like "कथन मैं" → "कथन I", "मैं और II" → "I और II"
+  result = result.replace(/मैं\s+(और|व|एवं|तथा)\s+(II|III|IV|V|VI)/g, 'I $1 $2');
+  result = result.replace(/(II|III|IV|V|VI)\s+(और|व|एवं|तथा)\s+मैं(?=\s|$|,|।)/g, '$1 $2 I');
+  // "कथन मैं" / "कथन मैं:" (statement I)
+  result = result.replace(/(कथन|विकल्प|क्रमांक|संख्या|बिंदु)\s+मैं(?=\s|$|,|।|:)/g, '$1 I');
+  // "केवल मैं" → "केवल I" in MCQ answer context
+  result = result.replace(/केवल\s+मैं(?=\s|$|,|।)/g, 'केवल I');
+  // "मैं, II और III" → "I, II और III"
+  result = result.replace(/मैं\s*,\s*(II|III|IV)/g, 'I, $1');
+
+  // ── 8. Fix Q → "प्रश्न" or "प्र" when it's a label ────────────────────────
+  // In table contexts, Q is a column/person label, not "question"
+  // "प्र" as a single label (not part of larger word)
+  result = result.replace(/\bप्र\b(?=\s*[-–—]\s*\d)/g, 'Q');
+  result = result.replace(/\(प्र\)/g, '(Q)');
+
+  // ── 9. Fix PM/AM time transliteration ───────────────────────────────────────
+  // "5 पीएम" → "5 PM", "अपराह्न" in time context → "PM"
+  result = result.replace(/(\d+)\s*पीएम/g, '$1 PM');
+  result = result.replace(/(\d+)\s*एएम/g, '$1 AM');
+  // "अपराह्न N बजे" or "N बजे अपराह्न" patterns — keep Hindi but more natural
+  result = result.replace(/(\d+)\s*अपराह्न/g, '$1 PM');
+  result = result.replace(/अपराह्न\s*(\d+)/g, '$1 PM');
+  result = result.replace(/(\d+)\s*पूर्वाह्न/g, '$1 AM');
+  result = result.replace(/पूर्वाह्न\s*(\d+)/g, '$1 AM');
+
+  // ── 10. Fix & → "और" when it's a separator in coded keys ──────────────────
+  // Keep this light — only fix in clearly label contexts
+
+  return result;
+}
+
+/**
+ * Fix "के" being used where "K" (the letter) was intended.
+ * Only in specific label contexts to avoid false positives.
+ */
+function fixLetterK(text) {
+  if (!text) return text;
+  // "के" followed by dash+number in code/table context
+  return text.replace(/\bके\s*[-–—]\s*(\d)/g, 'K-$1');
+}
+
+/**
  * Apply Hindi-to-Hindi corrections for known systematic mistranslations.
  * Call this AFTER applyGlossaryPostProcessing.
  */
@@ -828,9 +995,16 @@ export function applyHindiCorrections(hindiText) {
   if (!hindiText) return hindiText;
   let result = hindiText;
 
-  // Fix MCQ label corruption first
+  // Fix MCQ label corruption first (एमसीक्यू → (a)/(b)/(c)/(d))
   result = fixMCQLabels(result);
 
+  // Fix single English letter transliterations (ए→A, बी→B, etc.)
+  result = fixLetterTransliteration(result);
+
+  // Fix "के" → "K" in label contexts
+  result = fixLetterK(result);
+
+  // Apply known wrong→correct Hindi corrections
   for (const [wrong, correct] of HINDI_CORRECTIONS) {
     if (result.includes(wrong)) {
       result = result.split(wrong).join(correct);
