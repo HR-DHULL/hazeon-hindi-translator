@@ -14,7 +14,7 @@ const genAI = process.env.GEMINI_API_KEY
 if (genAI) console.log('  Translation engine: Google Gemini (context-aware UPSC/HCS mode)');
 
 // ── Gemini model — gemini-2.0-flash for speed, gemini-2.5-pro for quality ────
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
 const UPSC_SYSTEM_PROMPT = `You are an expert Hindi translator specializing in UPSC and HCS (Haryana Civil Services) examination material. You use official Rajbhasha (राजभाषा) — formal government Hindi as used in Lok Sabha proceedings, official gazettes, and UPSC Hindi-medium papers.
