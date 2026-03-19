@@ -8,10 +8,10 @@
   included_files = ["server/**"]
 
 [functions."api"]
-  external_node_modules = ["express", "express-rate-limit", "multer", "mammoth", "pdfkit", "jszip", "@anthropic-ai/sdk", "@supabase/supabase-js", "uuid", "nodemailer"]
+  external_node_modules = ["express", "express-rate-limit", "multer", "mammoth", "pdfkit", "jszip", "@google/generative-ai", "@supabase/supabase-js", "uuid", "nodemailer"]
 
 [functions."translate-background"]
-  external_node_modules = ["mammoth", "pdfkit", "jszip", "@anthropic-ai/sdk", "@supabase/supabase-js", "uuid"]
+  external_node_modules = ["mammoth", "pdfkit", "jszip", "@google/generative-ai", "@supabase/supabase-js", "uuid"]
 
 # Route API calls to the serverless function
 [[redirects]]

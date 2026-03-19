@@ -1,20 +1,20 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { applyGlossaryPostProcessing, applyHindiCorrections, getGlossaryPrompt } from './glossary.js';
 import { applyContextDisambiguation, getDisambiguationPrompt } from './contextDisambiguation.js';
 
-// ── Anthropic Claude AI — REQUIRED ───────────────────────────────────────────
-if (!process.env.ANTHROPIC_API_KEY) {
-  console.error('  WARNING: ANTHROPIC_API_KEY is not set. Translation will fail until configured.');
-  console.error('  Get your key from: console.anthropic.com → API Keys');
+// ── Google Gemini AI — REQUIRED ──────────────────────────────────────────────
+if (!process.env.GEMINI_API_KEY) {
+  console.error('  WARNING: GEMINI_API_KEY is not set. Translation will fail until configured.');
+  console.error('  Get your key from: aistudio.google.com → API Keys');
 }
 
-const anthropic = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const genAI = process.env.GEMINI_API_KEY
+  ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
   : null;
-if (anthropic) console.log('  Translation engine: Claude AI (context-aware UPSC/HCS mode)');
+if (genAI) console.log('  Translation engine: Google Gemini (context-aware UPSC/HCS mode)');
 
-// ── Claude model — use Haiku for speed/cost, Sonnet for best quality ─────────
-const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
+// ── Gemini model — gemini-2.0-flash for speed, gemini-2.5-pro for quality ────
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
 const UPSC_SYSTEM_PROMPT = `You are an expert Hindi translator specializing in UPSC and HCS (Haryana Civil Services) examination material. You use official Rajbhasha (राजभाषा) — formal government Hindi as used in Lok Sabha proceedings, official gazettes, and UPSC Hindi-medium papers.
@@ -140,14 +140,19 @@ Your translation rules:
 
 ${getGlossaryPrompt()}`;
 
-// ── Claude translation ────────────────────────────────────────────────────────
+// ── Gemini translation ───────────────────────────────────────────────────────
 /**
- * Translate a batch of paragraphs using Claude.
- * Sends them as a numbered list so Claude returns them in the same order.
+ * Translate a batch of paragraphs using Gemini.
+ * Sends them as a numbered list so Gemini returns them in the same order.
  */
-async function translateWithClaude(paragraphs) {
+async function translateWithGemini(paragraphs) {
   if (paragraphs.length === 0) return [];
-  if (!anthropic) throw new Error('ANTHROPIC_API_KEY is not configured. Set it in environment variables.');
+  if (!genAI) throw new Error('GEMINI_API_KEY is not configured. Set it in environment variables.');
+
+  const model = genAI.getGenerativeModel({
+    model: GEMINI_MODEL,
+    systemInstruction: UPSC_SYSTEM_PROMPT,
+  });
 
   // Number each paragraph so we can split the output reliably
   const numbered = paragraphs
@@ -155,15 +160,9 @@ async function translateWithClaude(paragraphs) {
     .join('\n\n');
 
   // ── Context-aware disambiguation ──────────────────────────────────────────
-  // Analyze the full text to detect ambiguous terms and their correct meanings
   const fullText = paragraphs.join(' ');
   const { disambiguations, detectedSubject } = applyContextDisambiguation(fullText);
   const disambiguationInstructions = getDisambiguationPrompt(disambiguations);
-
-  // Inject disambiguation context into the system prompt for this batch
-  const systemPrompt = disambiguationInstructions
-    ? UPSC_SYSTEM_PROMPT + disambiguationInstructions
-    : UPSC_SYSTEM_PROMPT;
 
   if (disambiguations.length > 0) {
     console.log(`  Context disambiguation: detected subject="${detectedSubject}", ${disambiguations.length} ambiguous terms resolved`);
@@ -172,35 +171,28 @@ async function translateWithClaude(paragraphs) {
     }
   }
 
-  const userMsg = `Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output.\n\n${numbered}`;
+  const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output.\n\n${numbered}`;
 
-  const response = await anthropic.messages.create({
-    model: CLAUDE_MODEL,
-    max_tokens: 4096,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userMsg }],
-  });
-
-  const rawOutput = response.content[0]?.text || '';
+  const result = await model.generateContent(userMsg);
+  const rawOutput = result.response.text();
 
   // Split on [1], [2], [3]... markers
   const parts = rawOutput.split(/\n*\[(\d+)\]\s*/);
-  // parts[0] = '' (before first marker), then alternating index / text
-  const result = Array(paragraphs.length).fill('');
+  const parsed = Array(paragraphs.length).fill('');
   for (let i = 1; i < parts.length - 1; i += 2) {
     const idx = parseInt(parts[i], 10) - 1;
     if (idx >= 0 && idx < paragraphs.length) {
-      result[idx] = parts[i + 1].trim();
+      parsed[idx] = parts[i + 1].trim();
     }
   }
 
-  // Fallback: if Claude didn't number properly, return as-is split by double newline
-  const hasEmpty = result.some((r, i) => !r && paragraphs[i].trim());
+  // Fallback: if Gemini didn't number properly, return as-is split by double newline
+  const hasEmpty = parsed.some((r, i) => !r && paragraphs[i].trim());
   if (hasEmpty && paragraphs.length === 1) {
     return [rawOutput.trim()];
   }
 
-  return result.map((t, i) => t || paragraphs[i]); // keep original if Claude missed it
+  return parsed.map((t, i) => t || paragraphs[i]); // keep original if missed
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -209,7 +201,7 @@ async function translateWithClaude(paragraphs) {
  */
 export async function translateChunk(text, chunkIndex, totalChunks, onProgress) {
   try {
-    const results = await translateWithClaude([text]);
+    const results = await translateWithGemini([text]);
     let translatedText = results[0] || text;
     translatedText = applyGlossaryPostProcessing(translatedText, text);
     translatedText = applyHindiCorrections(translatedText);
@@ -261,12 +253,12 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
  * Used for DOCX clone-and-replace.
  */
 export async function translateParagraphs(paragraphs, bookContext = '', onProgress) {
-  return translateParagraphsWithClaude(paragraphs, onProgress);
+  return translateParagraphsBatched(paragraphs, onProgress);
 }
 
-// ── Claude paragraph translation (batched) ────────────────────────────────────
-async function translateParagraphsWithClaude(paragraphs, onProgress) {
-  const BATCH_SIZE = 20; // Claude can handle larger batches
+// ── Gemini paragraph translation (batched) ───────────────────────────────────
+async function translateParagraphsBatched(paragraphs, onProgress) {
+  const BATCH_SIZE = 20;
   const translated = [];
   const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
 
@@ -294,7 +286,7 @@ async function translateParagraphsWithClaude(paragraphs, onProgress) {
 
       const batchResult = Array(batch.length).fill('');
       if (nonEmptyTexts.length > 0) {
-        const results = await translateWithClaude(nonEmptyTexts);
+        const results = await translateWithGemini(nonEmptyTexts);
         nonEmptyIndices.forEach((origIdx, ri) => {
           let t = results[ri] || batch[origIdx];
           t = applyGlossaryPostProcessing(t, batch[origIdx]);
@@ -304,8 +296,8 @@ async function translateParagraphsWithClaude(paragraphs, onProgress) {
       }
       translated.push(...batchResult);
     } catch (err) {
-      console.warn(`Claude batch ${b + 1} failed: ${err.message}. Keeping originals.`);
-      translated.push(...batch); // keep original on failure
+      console.warn(`Gemini batch ${b + 1} failed: ${err.message}. Keeping originals.`);
+      translated.push(...batch);
     }
 
     if (b < totalBatches - 1) {

@@ -95,7 +95,7 @@ if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
 // Only start a listening server in local development — not in Netlify/Vercel serverless
 if (!process.env.NETLIFY && !process.env.VERCEL && !process.env.NETLIFY_DEV) {
   const PORT = process.env.PORT || 3001;
-  const engine = `Claude AI (${process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001'})`;
+  const engine = `Google Gemini (${process.env.GEMINI_MODEL || 'gemini-2.0-flash'})`;
   app.listen(PORT, () => {
     console.log(`\n  UPSC Hindi Translator running on http://localhost:${PORT}`);
     console.log(`  Translation engine: ${engine}\n`);
