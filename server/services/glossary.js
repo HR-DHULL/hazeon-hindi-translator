@@ -774,7 +774,51 @@ export const HINDI_CORRECTIONS = [
   ['पृथ्वी – सतह से हवा', 'पृथ्वी – सतह से सतह'],
   ['पृथ्वी - सतह से वायु', 'पृथ्वी - सतह से सतह'],
   ['पृथ्वी – सतह से वायु', 'पृथ्वी – सतह से सतह'],
+
+  // "predictor" mistranslated as "भविष्यअध्यक्ष" (future+president) — should be पूर्वानुमानकर्ता
+  ['भविष्यअध्यक्ष', 'पूर्वानुमानकर्ता'],
+  ['भविष्य अध्यक्ष', 'पूर्वानुमानकर्ता'],
+
+  // "elasticity" in economics context — "अस्थिरता" (instability) used instead of "लोच"
+  ['मांग की अस्थिरता', 'मांग की लोच'],
 ];
+
+/**
+ * Fix corrupted MCQ option labels.
+ * Claude sometimes translates (a)/(b)/(c)/(d) into Hindi transliterations
+ * like «एमसीक्यू1», "MCQ0", "MCQ1", etc. This restores them.
+ */
+function fixMCQLabels(text) {
+  if (!text) return text;
+  let result = text;
+
+  // Map MCQ number patterns to correct option labels
+  // Pattern: «एमसीक्यू{N}» or "MCQ{N}" or MCQ{N}" or «MCQ{N}» or "एमसीक्यू{N}"
+  const mcqMap = {
+    '0': '(a)', '1': '(b)', '2': '(c)', '3': '(d)',
+    '4': '(a)', '5': '(b)', '6': '(c)', '7': '(d)',
+    '8': '(a)', '9': '(b)', '10': '(c)', '11': '(d)',
+    '12': '(a)',
+  };
+
+  // Fix «एमसीक्यू{N}» pattern (Hindi transliteration with guillemets)
+  result = result.replace(/[«»""'\s]*एमसीक्यू(\d{1,2})[«»""'\s]*/g, (match, num) => {
+    return (mcqMap[num] || `(${String.fromCharCode(97 + (parseInt(num) % 4))})`) + ' ';
+  });
+
+  // Fix "MCQ{N}" / MCQ{N}" / «MCQ{N}» patterns (English MCQ with quotes)
+  result = result.replace(/[«»""'\s]*MCQ(\d{1,2})[«»""'\s]*/gi, (match, num) => {
+    return (mcqMap[num] || `(${String.fromCharCode(97 + (parseInt(num) % 4))})`) + ' ';
+  });
+
+  // Fix केवल "MCQ1" 2 → (b) केवल 2 (where MCQ replaced option label before text)
+  result = result.replace(/केवल\s*\(([a-d])\)\s*/g, '($1) केवल ');
+
+  // Fix merged option lines: ensure space/newline before option labels
+  result = result.replace(/([^\n(])(\([a-d]\)\s)/g, '$1\n$2');
+
+  return result;
+}
 
 /**
  * Apply Hindi-to-Hindi corrections for known systematic mistranslations.
@@ -783,6 +827,10 @@ export const HINDI_CORRECTIONS = [
 export function applyHindiCorrections(hindiText) {
   if (!hindiText) return hindiText;
   let result = hindiText;
+
+  // Fix MCQ label corruption first
+  result = fixMCQLabels(result);
+
   for (const [wrong, correct] of HINDI_CORRECTIONS) {
     if (result.includes(wrong)) {
       result = result.split(wrong).join(correct);

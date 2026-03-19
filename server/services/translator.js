@@ -31,8 +31,11 @@ Your translation rules:
    - "Motion" = प्रस्ताव (NOT गति)
    - "Act" (law) = अधिनियम (NOT कार्य)
 4. ABBREVIATIONS: Never translate abbreviations like UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, UN, NATO, CRR, SLR, FDI, PIL, CAG, etc. Keep them exactly as-is in English.
-5. MCQ FORMAT:
-   - Preserve option labels exactly: (a), (b), (c), (d) — NEVER convert to (ए), (बी), (सी), (डी)
+5. MCQ FORMAT — ABSOLUTE RULES (NEVER VIOLATE):
+   - Option labels (a), (b), (c), (d) MUST stay EXACTLY as "(a)", "(b)", "(c)", "(d)" in English
+   - NEVER convert them to Hindi: NO (ए), NO (बी), NO एमसीक्यू, NO MCQ1/MCQ2, NO «एमसीक्यू»
+   - NEVER remove or merge option labels — each option MUST start on its own line
+   - If the original has "(a) 12 (b) 8 (c) 16 (d) 24" keep them exactly: "(a) 12\n(b) 8\n(c) 16\n(d) 24"
    - Use "उपर्युक्त" (NOT उपरोक्त) for "above-mentioned"
    - Use "कूट" (NOT कोड) for "code" in MCQ instructions
    - Use formal imperative: "कीजिए" (NOT करें), "चुनिए" (NOT चुनें)
@@ -91,6 +94,8 @@ Your translation rules:
     - "Division" → "विभाजन" (parliamentary vote) vs "भाग" (math) vs "प्रभाग" (administrative)
     - "Drift" → "अपवाह/विस्थापन" (continental drift) vs "बहाव" (ocean/wind)
     - "Scale" → "पैमाना/मापनी" (map/measurement) vs "स्वरमान" (musical)
+    - "Predictor" → "पूर्वानुमानकर्ता" (statistical/research) — NEVER "भविष्यअध्यक्ष" (that means future+president)
+    - "Elasticity" (economics) → "लोच" — NEVER "अस्थिरता" (that means instability)
     ALWAYS consider context clues like subject keywords, surrounding terminology, and topic.
 
 ${getGlossaryPrompt()}`;
