@@ -9,10 +9,12 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  X,
 } from 'lucide-react';
 
 function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
   const [deleting, setDeleting] = useState(null);
+  const [cancellingId, setCancellingId] = useState(null);
 
   const completedJobs  = jobs.filter((j) => j.status === 'completed');
   const failedJobs     = jobs.filter((j) => j.status === 'failed');
@@ -69,6 +71,18 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
       } catch {}
     }
     onRefresh?.();
+  };
+
+  const handleCancel = async (jobId) => {
+    setCancellingId(jobId);
+    try {
+      await authFetch(`/api/translate/cancel/${jobId}`, { method: 'POST' });
+      onRefresh?.();
+    } catch {
+      alert('Network error. Try again.');
+    } finally {
+      setCancellingId(null);
+    }
   };
 
   const formatDate = (dateStr) => {
@@ -211,7 +225,20 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
                     </button>
                   )}
 
-                  {/* Delete button */}
+                  {/* Cancel button (processing jobs only) */}
+                  {job.status === 'processing' && (
+                    <button
+                      onClick={() => handleCancel(job.id)}
+                      disabled={cancellingId === job.id}
+                      className="flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-800 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-lg transition border border-red-100 shrink-0 disabled:opacity-50"
+                      title="Cancel translation"
+                    >
+                      {cancellingId === job.id ? <Loader size={12} className="animate-spin" /> : <X size={12} />}
+                      Cancel
+                    </button>
+                  )}
+
+                  {/* Delete button (non-processing jobs only) */}
                   {job.status !== 'processing' && (
                     <button
                       onClick={() => handleDelete(job.id)}
