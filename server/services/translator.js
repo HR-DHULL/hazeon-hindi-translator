@@ -17,7 +17,8 @@ if (genAI) console.log('  Translation engine: Google Gemini (context-aware UPSC/
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
-const UPSC_SYSTEM_PROMPT = `You are an expert Hindi translator specializing in UPSC and HCS (Haryana Civil Services) examination material. You use official Rajbhasha (राजभाषा) — formal government Hindi as used in Lok Sabha proceedings, official gazettes, and UPSC Hindi-medium papers.
+// Base prompt (without glossary — glossary is injected dynamically per-subject)
+const UPSC_BASE_PROMPT = `You are an expert Hindi translator specializing in UPSC and HCS (Haryana Civil Services) examination material. You use official Rajbhasha (राजभाषा) — formal government Hindi as used in Lok Sabha proceedings, official gazettes, and UPSC Hindi-medium papers.
 
 Your translation rules:
 1. CONTEXT FIRST: Understand how each question/answer is framed before translating. Match the formal, precise language used in civil services exams.
@@ -122,6 +123,12 @@ Your translation rules:
 
 ${getGlossaryPrompt()}`;
 
+/** Build the full system prompt, injecting subject-specific glossary if detected. */
+function buildSystemPrompt(subject = null) {
+  if (!subject || subject === 'general') return UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt();
+  return UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt(subject);
+}
+
 // ── Gemini translation ───────────────────────────────────────────────────────
 
 /** Check if text has significant untranslated English content */
@@ -151,7 +158,7 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
 
   const model = genAI.getGenerativeModel({
     model: GEMINI_MODEL,
-    systemInstruction: UPSC_SYSTEM_PROMPT,
+    systemInstruction: systemPrompt,
     generationConfig: {
       temperature: 0.2,
       thinkingConfig: { thinkingBudget: 0 },
@@ -163,14 +170,22 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
     .map((p, i) => `[${i + 1}] ${p}`)
     .join('\n\n');
 
-  // ── Context-aware disambiguation ──────────────────────────────────────────
+  // ── Context-aware disambiguation + subject detection ─────────────────────
   const fullText = paragraphs.join(' ');
   const { disambiguations, detectedSubject } = applyContextDisambiguation(fullText);
   const disambiguationInstructions = getDisambiguationPrompt(disambiguations);
 
-  if (disambiguations.length > 0 && retryCount === 0) {
-    console.log(`  Context disambiguation: detected subject="${detectedSubject}", ${disambiguations.length} ambiguous terms resolved`);
+  if (retryCount === 0) {
+    if (detectedSubject && detectedSubject !== 'general') {
+      console.log(`  Subject detected: "${detectedSubject}" — injecting subject-specific glossary`);
+    }
+    if (disambiguations.length > 0) {
+      console.log(`  Context disambiguation: ${disambiguations.length} ambiguous terms resolved`);
+    }
   }
+
+  // Build system prompt dynamically with detected subject glossary
+  const systemPrompt = buildSystemPrompt(detectedSubject);
 
   const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output. TRANSLATE EVERYTHING INTO HINDI — do NOT leave any English text untranslated except abbreviations and math formulas.\n\n${numbered}`;
 
