@@ -251,8 +251,8 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 
 // ── Gemini paragraph translation (batched) ───────────────────────────────────
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  // Smaller batches = more reliable 1:1 mapping and fewer missed paragraphs
-  const BATCH_SIZE = 20;
+  // Batch size 35: fits ~60 batches for 100-page docs within Vercel's 300s limit
+  const BATCH_SIZE = 35;
   const translated = [];
   const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
 

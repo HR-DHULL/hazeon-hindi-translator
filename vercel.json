@@ -7,7 +7,7 @@
   ],
   "functions": {
     "api/index.js": {
-      "maxDuration": 800,
+      "maxDuration": 300,
       "memory": 1024
     }
   },
