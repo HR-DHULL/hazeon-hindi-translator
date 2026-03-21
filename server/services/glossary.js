@@ -1668,49 +1668,27 @@ export const SUBJECT_GLOSSARIES = {
 };
 
 /**
- * Build the glossary instruction string for the translation prompt.
- * If a subject is detected, injects subject-specific terms prominently.
+ * Build the glossary string for the translation prompt.
+ * Injects subject-specific terms first (HIGH PRIORITY), then base glossary.
  */
 export function getGlossaryPrompt(subject = null) {
   const baseEntries = Object.entries(UPSC_HCS_GLOSSARY)
-    .map(([en, hi]) => `  "${en}" → "${hi}"`)
+    .map(([en, hi]) => `"${en}" → "${hi}"`)
     .join('\n');
-
-  const subjectLabel = {
-    history: 'इतिहास (History)',
-    geography: 'भूगोल (Geography)',
-    economics: 'अर्थशास्त्र (Economics)',
-    science: 'विज्ञान एवं प्रौद्योगिकी (Science & Technology)',
-    environment: 'पर्यावरण (Environment & Ecology)',
-    polity: 'राजव्यवस्था (Polity & Governance)',
-  };
 
   let subjectSection = '';
   if (subject && SUBJECT_GLOSSARIES[subject]) {
     const subjectEntries = Object.entries(SUBJECT_GLOSSARIES[subject])
-      .map(([en, hi]) => `  "${en}" → "${hi}"`)
+      .map(([en, hi]) => `"${en}" → "${hi}"`)
       .join('\n');
-    const label = subjectLabel[subject] || subject;
-    subjectSection = `\n\n## Subject-Specific Glossary: ${label} (HIGH PRIORITY — apply first)
-These terms are specific to the detected subject. Use them with highest priority:
-${subjectEntries}`;
+    subjectSection = `## ${subject.toUpperCase()} GLOSSARY (apply these first):
+${subjectEntries}
+
+`;
   }
 
-  return `## UPSC/HCS Terminology Glossary (MANDATORY — 600+ official terms)
-You MUST use these exact Hindi translations for the following terms whenever they appear.
-NEVER transliterate English words into Devanagari (e.g., NEVER use फिस्कल, ज्यूडिशियरी, एग्जीक्यूटिव).
-Always use the formal Rajbhasha (राजभाषा) Hindi equivalent.${subjectSection}
-
-## Base Glossary (always applies):
-${baseEntries}
-
-## MCQ Formatting Rules:
-- Keep option labels (a), (b), (c), (d) in English — NEVER convert to (ए), (बी), (सी), (डी)
-- Use "उपर्युक्त" (NOT उपरोक्त) for "above-mentioned"
-- Use "कूट" (NOT कोड) for "code" in MCQ context
-- Use formal imperative: "कीजिए" (NOT करें), "चुनिए" (NOT चुनें)
-- Standard MCQ Hindi: "निम्नलिखित कथनों पर विचार कीजिए"
-- Standard MCQ Hindi: "नीचे दिए गए कूट का प्रयोग कर सही उत्तर चुनिए"`;
+  return `${subjectSection}## TERMINOLOGY (use exact translations below — override your defaults):
+${baseEntries}`;
 }
 
 /**
