@@ -106,15 +106,12 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
 
   const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output. TRANSLATE EVERYTHING INTO HINDI — do NOT leave any English text untranslated except abbreviations and math formulas.\n\n${numbered}`;
 
-  // 45-second timeout per batch — prevents Gemini from hanging indefinitely
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45000);
-  let result;
-  try {
-    result = await model.generateContent(userMsg, { signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+  // 45-second timeout per batch using Promise.race (more reliable than AbortController with Gemini SDK)
+  const timeoutMs = 45000;
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`Gemini batch timed out after ${timeoutMs / 1000}s`)), timeoutMs)
+  );
+  const result = await Promise.race([model.generateContent(userMsg), timeoutPromise]);
   const rawOutput = result.response.text();
 
   // Split on [1], [2], [3]... markers
@@ -293,19 +290,26 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
       }
       translated.push(...batchResult);
     } catch (err) {
-      console.warn(`Gemini batch ${b + 1} failed: ${err.message}. Retrying individually...`);
-      // Instead of keeping originals, retry each paragraph individually
-      for (let i = 0; i < batch.length; i++) {
-        if (!batch[i].trim()) { translated.push(''); continue; }
-        try {
-          const results = await translateWithGemini([batch[i]]);
-          let t = results[0] || batch[i];
-          t = applyGlossaryPostProcessing(t, batch[i]);
-          t = applyHindiCorrections(t);
-          translated.push(t);
-        } catch (retryErr) {
-          console.warn(`  Individual retry failed for paragraph ${start + i}: ${retryErr.message}`);
-          translated.push(batch[i]); // last resort: keep original
+      const isTimeout = err.message.includes('timed out');
+      if (isTimeout) {
+        // Timeout — skip retries, keep originals to avoid stalling for minutes
+        console.warn(`Gemini batch ${b + 1} timed out — keeping originals for this batch`);
+        translated.push(...batch);
+      } else {
+        // Non-timeout failure — retry each paragraph individually
+        console.warn(`Gemini batch ${b + 1} failed: ${err.message}. Retrying individually...`);
+        for (let i = 0; i < batch.length; i++) {
+          if (!batch[i].trim()) { translated.push(''); continue; }
+          try {
+            const results = await translateWithGemini([batch[i]]);
+            let t = results[0] || batch[i];
+            t = applyGlossaryPostProcessing(t, batch[i]);
+            t = applyHindiCorrections(t);
+            translated.push(t);
+          } catch (retryErr) {
+            console.warn(`  Individual retry failed for paragraph ${start + i}: ${retryErr.message}`);
+            translated.push(batch[i]); // last resort: keep original
+          }
         }
       }
     }
