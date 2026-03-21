@@ -28,14 +28,29 @@ function AppShell() {
     if (isLoggedIn) loadJobs();
   }, [isLoggedIn]);
 
+  const staleRef = useRef({ lastProgress: null, lastProgressAt: null });
+
   useEffect(() => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (!currentJob?.id || currentJob.status === 'completed' || currentJob.status === 'failed') return;
+    staleRef.current = { lastProgress: currentJob.progress, lastProgressAt: Date.now() };
+
     pollRef.current = setInterval(async () => {
       try {
         const r = await authFetch(`/api/translate/status/${currentJob.id}`);
         if (!r.ok) return;
         const data = await r.json();
+
+        // Stale job detection: if progress hasn't changed in 10 minutes, mark failed
+        if (data.status === 'processing') {
+          if (data.progress !== staleRef.current.lastProgress) {
+            staleRef.current = { lastProgress: data.progress, lastProgressAt: Date.now() };
+          } else if (Date.now() - staleRef.current.lastProgressAt > 10 * 60 * 1000) {
+            data.status = 'failed';
+            data.message = 'Translation timed out. The document may be too large. Please try again.';
+          }
+        }
+
         setCurrentJob(data);
         if (data.status === 'completed' || data.status === 'failed') {
           clearInterval(pollRef.current);
