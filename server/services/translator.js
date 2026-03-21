@@ -74,15 +74,6 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
   if (paragraphs.length === 0) return [];
   if (!genAI) throw new Error('GEMINI_API_KEY is not configured. Set it in environment variables.');
 
-  const model = genAI.getGenerativeModel({
-    model: GEMINI_MODEL,
-    systemInstruction: systemPrompt,
-    generationConfig: {
-      temperature: 0.2,
-      thinkingConfig: { thinkingBudget: 0 },
-    },
-  });
-
   // Number each paragraph so we can split the output reliably
   const numbered = paragraphs
     .map((p, i) => `[${i + 1}] ${p}`)
@@ -102,8 +93,16 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
     }
   }
 
-  // Build system prompt dynamically with detected subject glossary
+  // Build system prompt with detected subject, then create model
   const systemPrompt = buildSystemPrompt(detectedSubject);
+  const model = genAI.getGenerativeModel({
+    model: GEMINI_MODEL,
+    systemInstruction: systemPrompt,
+    generationConfig: {
+      temperature: 0.2,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
 
   const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output. TRANSLATE EVERYTHING INTO HINDI — do NOT leave any English text untranslated except abbreviations and math formulas.\n\n${numbered}`;
 
