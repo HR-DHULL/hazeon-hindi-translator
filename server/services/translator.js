@@ -106,7 +106,15 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
 
   const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output. TRANSLATE EVERYTHING INTO HINDI — do NOT leave any English text untranslated except abbreviations and math formulas.\n\n${numbered}`;
 
-  const result = await model.generateContent(userMsg);
+  // 45-second timeout per batch — prevents Gemini from hanging indefinitely
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 45000);
+  let result;
+  try {
+    result = await model.generateContent(userMsg, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   const rawOutput = result.response.text();
 
   // Split on [1], [2], [3]... markers
@@ -211,7 +219,7 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 // ── Gemini paragraph translation (batched) ───────────────────────────────────
 async function translateParagraphsBatched(paragraphs, onProgress) {
   // Smaller batches = more reliable 1:1 mapping and fewer missed paragraphs
-  const BATCH_SIZE = 15;
+  const BATCH_SIZE = 20;
   const translated = [];
   const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
 
