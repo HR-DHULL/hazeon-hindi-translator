@@ -209,11 +209,47 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
 }
 
 /**
+ * Post-processing: re-add missing MCQ option labels (a)(b)(c)(d).
+ * When questions span batch boundaries, Gemini sometimes drops labels for
+ * options (c) and (d) because it loses the MCQ context.
+ */
+function fixMissingMCQLabels(paragraphs) {
+  // Patterns that look like MCQ option content but have no label
+  const optionContentRe = /^(केवल\s+|only\s+|सभी|उपर्युक्त|इनमें\s+से\s+कोई|none\s+of|all\s+of|[1-9](\s*[,،،]\s*[1-9])*\s*(और|and|एवं|तथा|\s))/i;
+  const labelledRe = /^\s*\(([a-d])\)\s*/i;
+  const labels = ['(a)', '(b)', '(c)', '(d)'];
+
+  const result = [...paragraphs];
+
+  for (let i = 0; i < result.length; i++) {
+    const line = (result[i] || '').trim();
+    // Found a labelled (a) option
+    if (labelledRe.test(line) && line.match(/^\s*\(a\)/i)) {
+      // Check next 3 paragraphs — add missing labels (b)(c)(d)
+      for (let offset = 1; offset <= 3; offset++) {
+        const idx = i + offset;
+        if (idx >= result.length) break;
+        const next = (result[idx] || '').trim();
+        if (!next) continue;
+        // If it already has a label, stop fixing this sequence
+        if (labelledRe.test(next)) break;
+        // If it looks like MCQ option content without a label, add the label
+        if (optionContentRe.test(next)) {
+          result[idx] = labels[offset] + ' ' + next;
+        }
+      }
+    }
+  }
+  return result;
+}
+
+/**
  * Translate an array of paragraphs preserving 1-to-1 order.
  * Used for DOCX clone-and-replace.
  */
 export async function translateParagraphs(paragraphs, bookContext = '', onProgress) {
-  return translateParagraphsBatched(paragraphs, onProgress);
+  const translated = await translateParagraphsBatched(paragraphs, onProgress);
+  return fixMissingMCQLabels(translated);
 }
 
 // ── Gemini paragraph translation (batched) ───────────────────────────────────
