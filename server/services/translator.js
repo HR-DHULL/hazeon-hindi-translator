@@ -315,5 +315,54 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
     }
   }
 
-  return translated;
+  return fixMissingMCQLabels(translated);
+}
+
+/**
+ * Post-process all translated paragraphs to restore missing MCQ option labels.
+ * When a question spans two batches, Gemini drops (c) and (d) labels.
+ * This scans the full document and re-adds labels based on sequence position.
+ */
+function fixMissingMCQLabels(paragraphs) {
+  // Option content patterns that indicate an MCQ option line
+  const isOptionContent = (line) =>
+    /^(केवल|सभी|कोई नहीं|उपर्युक्त में से कोई|[1-9]-[1-9]|A-|B-|C-|D-)/.test(line) ||
+    /^\d+[,-]\s*\d/.test(line);
+
+  const labels = ['(a)', '(b)', '(c)', '(d)'];
+  const result = [...paragraphs];
+
+  for (let i = 0; i < result.length; i++) {
+    const line = (result[i] || '').trim();
+
+    // Found an (a) labeled option — scan next 3 for missing (b)(c)(d)
+    if (/^\(a\)\s+/.test(line)) {
+      let labelIdx = 1; // next expected: (b)
+      for (let j = i + 1; j < result.length && labelIdx < 4; j++) {
+        const next = (result[j] || '').trim();
+        if (!next) continue;
+
+        // Already has correct label → advance
+        if (next.startsWith(labels[labelIdx])) {
+          labelIdx++;
+          continue;
+        }
+
+        // Has a different (x) label → stop (different question)
+        if (/^\([a-d]\)/.test(next)) break;
+
+        // Looks like option content but missing label → add it
+        if (isOptionContent(next)) {
+          result[j] = labels[labelIdx] + ' ' + next;
+          labelIdx++;
+          continue;
+        }
+
+        // Non-option line → stop looking
+        break;
+      }
+    }
+  }
+
+  return result;
 }

@@ -1713,7 +1713,13 @@ export function applyGlossaryPostProcessing(translatedText, originalText) {
     if (!upperOriginal.includes(englishTerm.toUpperCase())) continue;
     const termRegex = new RegExp(`\\b${escapeRegex(englishTerm)}\\b`, 'gi');
     if (termRegex.test(result)) {
-      result = result.replace(termRegex, hindiTerm);
+      // Avoid double-translation: skip if Hindi equivalent already appears right before this term
+      // e.g. "सकल राष्ट्रीय उत्पाद (GNP)" → keep as-is, don't replace GNP again
+      result = result.replace(termRegex, (match, offset) => {
+        const before = result.substring(Math.max(0, offset - hindiTerm.length - 5), offset);
+        if (before.includes(hindiTerm)) return match; // already translated nearby
+        return hindiTerm;
+      });
     }
   }
 
