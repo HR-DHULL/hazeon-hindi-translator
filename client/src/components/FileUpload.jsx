@@ -71,17 +71,38 @@ function FileUpload({ onUploadComplete }) {
     setUploading(true);
     setError('');
     try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-      if (bookContext.trim()) formData.append('bookContext', bookContext.trim());
-
-      const res = await authFetch('/api/translate/upload', { method: 'POST', body: formData });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Upload failed');
+      // Step 1: Get a signed Supabase upload URL (no file sent to Vercel)
+      const prepRes = await authFetch('/api/translate/prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: selectedFile.name, bookContext: bookContext.trim() }),
+      });
+      if (!prepRes.ok) {
+        const d = await prepRes.json();
+        throw new Error(d.error || 'Failed to prepare upload');
       }
-      const data = await res.json();
-      onUploadComplete({ id: data.jobId, originalName: data.originalName, status: 'processing', progress: 0, message: 'Starting...' });
+      const { jobId, signedUrl, storagePath, originalName } = await prepRes.json();
+
+      // Step 2: Upload directly to Supabase (bypasses Vercel size limit)
+      const uploadRes = await fetch(signedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+        body: selectedFile,
+      });
+      if (!uploadRes.ok) throw new Error('File upload to storage failed. Please try again.');
+
+      // Step 3: Tell the server to start translation
+      const startRes = await authFetch('/api/translate/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId, storagePath }),
+      });
+      if (!startRes.ok) {
+        const d = await startRes.json();
+        throw new Error(d.error || 'Failed to start translation');
+      }
+
+      onUploadComplete({ id: jobId, originalName, status: 'processing', progress: 0, message: 'Starting...' });
     } catch (err) {
       setError(err.message);
     } finally {

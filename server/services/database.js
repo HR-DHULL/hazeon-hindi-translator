@@ -164,6 +164,15 @@ export async function deleteInputFile(storageKey) {
   await supabase.storage.from(INPUT_BUCKET).remove([storageKey]);
 }
 
+export async function createSignedUploadUrl(jobId, filename) {
+  const storagePath = `${jobId}/${filename}`;
+  const { data, error } = await supabase.storage
+    .from(INPUT_BUCKET)
+    .createSignedUploadUrl(storagePath);
+  if (error) throw error;
+  return { signedUrl: data.signedUrl, storagePath };
+}
+
 // ─── Row ↔ Job mappers ───────────────────────────────────────────────────────
 
 function jobToRow(job) {

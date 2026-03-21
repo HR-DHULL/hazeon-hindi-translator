@@ -17,6 +17,7 @@ import {
   dbDeleteJob,
   dbCountActiveJobs,
   uploadInputFile,
+  createSignedUploadUrl,
 } from '../services/database.js';
 import { processTranslation } from '../services/translationPipeline.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -153,6 +154,106 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
         console.error(`Job ${jobId} failed:`, error);
         try { await dbUpdateJob(jobId, { status: 'failed', message: error.message }); } catch {}
       });
+  }
+});
+
+// ─── POST /api/translate/prepare ─────────────────────────────────────────────
+// Step 1 of direct-upload flow: validate, create job, return Supabase signed URL
+router.post('/prepare', uploadLimiter, requireAuth, async (req, res) => {
+  const { filename, bookContext: rawContext } = req.body;
+  if (!filename || !filename.toLowerCase().endsWith('.docx')) {
+    return res.status(400).json({ error: 'Only .docx files are accepted.' });
+  }
+
+  if (req.user.role !== 'admin') {
+    if (req.user.pagesUsed >= req.user.pagesLimit) {
+      return res.status(403).json({
+        error: `Page limit reached. You have used ${req.user.pagesUsed} of ${req.user.pagesLimit} pages.`,
+        limitReached: true,
+      });
+    }
+  }
+
+  try {
+    const activeCount = await dbCountActiveJobs();
+    if (activeCount >= MAX_CONCURRENT_JOBS) {
+      return res.status(429).json({ error: `Too many translations in progress (max ${MAX_CONCURRENT_JOBS}). Please wait.` });
+    }
+  } catch { /* allow if DB check fails */ }
+
+  const jobId = uuidv4();
+  const bookContext = (rawContext || '').trim().slice(0, 2000);
+  const job = {
+    id: jobId,
+    userId: req.user.id,
+    originalName: filename,
+    bookContext,
+    status: 'processing',
+    progress: 0,
+    message: 'Uploading file...',
+    createdAt: new Date().toISOString(),
+    outputFiles: [],
+  };
+
+  try { await dbCreateJob(job); } catch (err) {
+    console.error('Failed to create job:', err.message);
+    return res.status(500).json({ error: 'Failed to create job.' });
+  }
+
+  try {
+    const { signedUrl, storagePath } = await createSignedUploadUrl(jobId, filename);
+    res.json({ jobId, signedUrl, storagePath, originalName: filename });
+  } catch (err) {
+    console.error('Failed to create signed URL:', err.message);
+    res.status(500).json({ error: 'Failed to generate upload URL.' });
+  }
+});
+
+// ─── POST /api/translate/start ────────────────────────────────────────────────
+// Step 2 of direct-upload flow: file is in Supabase, kick off translation
+router.post('/start', requireAuth, async (req, res) => {
+  const { jobId, storagePath } = req.body;
+  if (!jobId || !storagePath) return res.status(400).json({ error: 'jobId and storagePath required.' });
+
+  const job = await dbGetJob(jobId).catch(() => null);
+  if (!job) return res.status(404).json({ error: 'Job not found.' });
+  if (job.userId !== req.user.id) return res.status(403).json({ error: 'Not authorized.' });
+
+  const baseName = path.basename(job.originalName, path.extname(job.originalName));
+
+  await dbUpdateJob(jobId, { message: 'File received, starting translation...' });
+
+  if (process.env.NETLIFY || (IS_PROD && process.env.URL)) {
+    try {
+      const bgUrl = `${process.env.URL}/.netlify/functions/translate-background`;
+      const bgRes = await fetch(bgUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-internal-secret': process.env.INTERNAL_SECRET || '' },
+        body: JSON.stringify({ jobId, storageKey: storagePath, baseName, bookContext: job.bookContext, userId: req.user.id, userRole: req.user.role }),
+      });
+      if (!bgRes.ok) {
+        console.error(`Background function returned ${bgRes.status}`);
+        await dbUpdateJob(jobId, { status: 'failed', message: 'Failed to start background translation.' });
+      }
+      res.json({ jobId, message: 'Translation started', originalName: job.originalName });
+    } catch (err) {
+      console.error('Failed to trigger background function:', err.message);
+      res.json({ jobId, message: 'Translation queued', originalName: job.originalName });
+    }
+  } else {
+    // Local / Vercel: download from Supabase to /tmp then process
+    res.json({ jobId, message: 'Translation started', originalName: job.originalName });
+    (async () => {
+      try {
+        const { downloadInputFile } = await import('../services/database.js');
+        const tmpPath = path.join('/tmp', `${jobId}_${job.originalName}`);
+        await downloadInputFile(storagePath, tmpPath);
+        await processTranslation(jobId, tmpPath, baseName, job.bookContext, req.user.id, req.user.role, OUTPUT_DIR);
+      } catch (error) {
+        console.error(`Job ${jobId} failed:`, error);
+        try { await dbUpdateJob(jobId, { status: 'failed', message: error.message }); } catch {}
+      }
+    })();
   }
 });
 
