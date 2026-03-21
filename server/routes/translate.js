@@ -217,7 +217,6 @@ router.post('/start', requireAuth, async (req, res) => {
 
   const job = await dbGetJob(jobId).catch(() => null);
   if (!job) return res.status(404).json({ error: 'Job not found.' });
-  if (job.userId !== req.user.id) return res.status(403).json({ error: 'Not authorized.' });
 
   const baseName = path.basename(job.originalName, path.extname(job.originalName));
 
