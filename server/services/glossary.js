@@ -890,8 +890,11 @@ function removeDuplicateOptions(text) {
  */
 function fixAnswerFormat(text) {
   if (!text) return text;
-  // Fix "उत्तर: c)" → "उत्तर: (c)" and similar
-  return text.replace(/(उत्तर\s*[:：]\s*)([a-dA-D])\)/g, '$1($2)');
+  // Fix "Answer: c)" or "Answer: (c)" → "उत्तर: (c)"
+  let result = text.replace(/\bAnswer\s*[:：]\s*\(?([a-dA-D])\)?/g, 'उत्तर: ($1)');
+  // Fix "उत्तर: c)" → "उत्तर: (c)"
+  result = result.replace(/(उत्तर\s*[:：]\s*)([a-dA-D])\)/g, '$1($2)');
+  return result;
 }
 
 /**
