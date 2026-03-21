@@ -31,9 +31,20 @@ RULES:
 8. Translate ALL English text — no English sentences left in output. Only exceptions: abbreviations, option labels, single-letter variables, formulas.
 9. Output ONLY the translated text. No explanations or comments.`;
 
-/** Build the full system prompt, injecting subject-specific glossary once. */
+// Precompute all prompts once at startup — enables Gemini implicit prefix caching
+// (same string object reused → API caches KV across calls → much faster)
+const SYSTEM_PROMPTS = {
+  default:     UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt(null),
+  history:     UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('history'),
+  geography:   UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('geography'),
+  economics:   UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('economics'),
+  science:     UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('science'),
+  environment: UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('environment'),
+  polity:      UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('polity'),
+};
+
 function buildSystemPrompt(subject = null) {
-  return UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt(subject && subject !== 'general' ? subject : null);
+  return SYSTEM_PROMPTS[subject] || SYSTEM_PROMPTS.default;
 }
 
 // ── Gemini translation ───────────────────────────────────────────────────────
