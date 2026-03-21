@@ -1109,6 +1109,12 @@ export function applyHindiCorrections(hindiText) {
   if (!hindiText) return hindiText;
   let result = hindiText;
 
+  // Fix: "थाली" in cell biology context → "पट्टिका"
+  // "भूमध्यरेखीय थाली" → "भूमध्यरेखीय पट्टिका" (equatorial/metaphase plate)
+  result = result.replace(/भूमध्यरेखीय\s+थाली/g, 'भूमध्यरेखीय पट्टिका');
+  result = result.replace(/मध्यवर्ती\s+थाली/g, 'मध्यवर्ती पट्टिका');
+  result = result.replace(/कोशिका\s+थाली/g, 'कोशिका पट्टिका');
+
   // Remove duplicate options (inline + separate lines = double options)
   result = removeDuplicateOptions(result);
 
@@ -1484,6 +1490,28 @@ export const SUBJECT_GLOSSARIES = {
     'Mitosis': 'समसूत्री विभाजन',
     'Meiosis': 'अर्धसूत्री विभाजन',
     'Chromosome': 'गुणसूत्र',
+    'Metaphase Plate': 'मध्यवर्ती पट्टिका',
+    'Equatorial Plate': 'भूमध्यरेखीय पट्टिका',
+    'Cell Plate': 'कोशिका पट्टिका',
+    'Spindle Fibre': 'तर्कु तंतु',
+    'Spindle Fiber': 'तर्कु तंतु',
+    'Centromere': 'सेंट्रोमियर / गुणसूत्र बिंदु',
+    'Centrosome': 'केंद्रकाय',
+    'Centriole': 'तारककेंद्र',
+    'Sister Chromatid': 'सहोदर क्रोमेटिड',
+    'Chromatid': 'क्रोमेटिड',
+    'Chromatin': 'क्रोमेटिन',
+    'Prophase': 'पूर्वावस्था',
+    'Metaphase': 'मध्यावस्था',
+    'Anaphase': 'पश्चावस्था',
+    'Telophase': 'अंत्यावस्था',
+    'Cytokinesis': 'कोशिकाद्रव्य विभाजन',
+    'Interphase': 'अंतरावस्था',
+    'Cell Cycle': 'कोशिका चक्र',
+    'Synapsis': 'सूत्रयुग्मन',
+    'Crossing Over': 'विनिमय',
+    'Bivalent': 'द्विसंयोजक',
+    'Tetrad': 'चतुष्क',
     'Mutation': 'उत्परिवर्तन',
     'Heredity': 'आनुवंशिकता',
     'Evolution': 'विकास / क्रमविकास',
