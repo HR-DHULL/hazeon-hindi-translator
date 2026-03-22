@@ -282,6 +282,9 @@ router.post('/cancel/:jobId', requireAuth, async (req, res) => {
 router.get('/status/:jobId', requireAuth, async (req, res) => {
   try {
     const job = await dbGetJob(req.params.jobId);
+    if (job.userId && job.userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
     res.json(job);
   } catch {
     res.status(404).json({ error: 'Job not found' });
@@ -292,6 +295,9 @@ router.get('/status/:jobId', requireAuth, async (req, res) => {
 router.get('/download/:jobId', requireAuth, async (req, res) => {
   try {
     const job = await dbGetJob(req.params.jobId);
+    if (job.userId && job.userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
     const file = job.outputFiles?.find((f) => f.format === 'docx');
     if (!file) return res.status(404).json({ error: 'No DOCX output available' });
     if (file.url) return res.redirect(file.url);
@@ -323,6 +329,9 @@ router.delete('/jobs/:jobId', requireAuth, async (req, res) => {
   try {
     const job = await dbGetJob(req.params.jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (job.userId && job.userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
 
     // Delete output files from storage
     if (job.outputFiles?.length) {
@@ -352,6 +361,10 @@ router.post('/share/:jobId', requireAuth, async (req, res) => {
   let job;
   try { job = await dbGetJob(req.params.jobId); }
   catch { return res.status(404).json({ error: 'Job not found' }); }
+
+  if (job.userId && job.userId !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Not authorized' });
+  }
 
   if (job.status !== 'completed') {
     return res.status(400).json({ error: 'Translation is not complete yet' });

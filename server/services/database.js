@@ -30,7 +30,7 @@ export async function dbGetJob(id) {
 
 export async function dbGetAllJobs(userId = null) {
   let query = supabase.from('jobs').select('*').order('created_at', { ascending: false });
-  // Note: jobs table has no user_id column — show all jobs for now
+  if (userId) query = query.eq('user_id', userId);
   const { data, error } = await query;
   if (error) throw error;
   return (data || []).map(rowToJob);
@@ -178,6 +178,7 @@ export async function createSignedUploadUrl(jobId, filename) {
 function jobToRow(job) {
   return {
     id: job.id,
+    user_id: job.userId || null,
     original_name: job.originalName,
     book_context: job.bookContext || '',
     status: job.status,
@@ -210,6 +211,7 @@ function updatesToRow(updates) {
 function rowToJob(row) {
   return {
     id: row.id,
+    userId: row.user_id,
     originalName: row.original_name,
     bookContext: row.book_context,
     status: row.status,
