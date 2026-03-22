@@ -36,6 +36,15 @@ const uploadLimiter = rateLimit({
   message: { error: 'Too many uploads. Please wait before uploading again.' },
 });
 
+// Rate limit status polling: max 120 per minute per IP (2/sec — enough for normal polling)
+const statusLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many status requests. Please slow down.' },
+});
+
 // Use /tmp in production (Netlify, Render serverless), local path in dev
 const IS_PROD = process.env.NODE_ENV === 'production';
 const OUTPUT_DIR = IS_PROD ? '/tmp/output' : path.join(__dirname, '..', 'uploads', 'output');
@@ -279,7 +288,7 @@ router.post('/cancel/:jobId', requireAuth, async (req, res) => {
 });
 
 // ─── GET /api/translate/status/:jobId ────────────────────────────────────────
-router.get('/status/:jobId', requireAuth, async (req, res) => {
+router.get('/status/:jobId', statusLimiter, requireAuth, async (req, res) => {
   try {
     const job = await dbGetJob(req.params.jobId);
     if (job.userId && job.userId !== req.user.id && req.user.role !== 'admin') {

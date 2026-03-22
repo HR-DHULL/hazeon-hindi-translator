@@ -39,10 +39,17 @@ if (process.env.NODE_ENV !== 'production') {
 
 const app = express();
 
-// ── CORS: restrict to allowed origins (default: allow all in dev) ──────────
+// ── CORS: restrict to allowed origins ─────────────────────────────────────
+// Priority: ALLOWED_ORIGINS env var → Vercel deployment URL → dev wildcard
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
-  : null;
+  : process.env.VERCEL_URL
+    ? [`https://${process.env.VERCEL_URL}`, 'https://hazeon-hindi-translator.vercel.app']
+    : null; // null = wildcard in dev only
+
+if (!allowedOrigins && process.env.NODE_ENV === 'production') {
+  console.warn('WARNING: ALLOWED_ORIGINS is not set in production. Set it to your frontend URL to restrict CORS.');
+}
 
 app.use(cors({
   origin: allowedOrigins
@@ -51,7 +58,7 @@ app.use(cors({
         if (!origin || allowedOrigins.includes(origin)) cb(null, true);
         else cb(new Error('Not allowed by CORS'));
       }
-    : '*', // dev fallback when ALLOWED_ORIGINS is not set
+    : '*', // dev only
   credentials: !!allowedOrigins,
 }));
 
