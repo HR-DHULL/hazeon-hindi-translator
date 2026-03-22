@@ -15,12 +15,12 @@ export default function AdminUsers() {
     setLoading(true); setLoadErr('');
     try {
       const r = await authFetch('/api/auth/users');
-      const data = await r.json();
-      if (!r.ok) { setLoadErr(data.error || 'Failed to load users'); return; }
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { setLoadErr(data.error || `Server error ${r.status}. Try logging out and back in.`); return; }
       if (!Array.isArray(data)) { setLoadErr('Unexpected response from server'); return; }
       setUsers(data);
     } catch (e) {
-      setLoadErr('Network error. Try refreshing.');
+      setLoadErr(`Network error: ${e.message}. Try logging out and back in.`);
     } finally { setLoading(false); }
   };
 
