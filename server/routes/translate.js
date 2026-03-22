@@ -205,8 +205,8 @@ router.post('/prepare', uploadLimiter, requireAuth, async (req, res) => {
   };
 
   try { await dbCreateJob(job); } catch (err) {
-    console.error('Failed to create job:', err.message, JSON.stringify(err));
-    return res.status(500).json({ error: `Failed to create job: ${err.message}` });
+    console.error('Failed to create job:', err.message);
+    return res.status(500).json({ error: 'Failed to create job. Please try again.' });
   }
 
   try {
