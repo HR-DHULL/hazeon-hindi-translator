@@ -37,9 +37,12 @@ export async function dbGetAllJobs(userId = null) {
 }
 
 export async function dbCreateJob(job) {
-  const { error } = await supabase
-    .from('jobs')
-    .insert([jobToRow(job)]);
+  // Use RPC (PL/pgSQL function) instead of PostgREST table insert to bypass
+  // schema cache — PostgREST validates column names against its cache for table
+  // operations but not for function internals, so this works even when the
+  // cache hasn't picked up the user_id column yet.
+  const row = jobToRow(job);
+  const { error } = await supabase.rpc('insert_job', { job_data: row });
   if (error) throw error;
 }
 
