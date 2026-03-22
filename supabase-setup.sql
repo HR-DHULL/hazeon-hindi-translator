@@ -51,13 +51,51 @@ CREATE POLICY "Service role full access on jobs"
   USING (true)
   WITH CHECK (true);
 
--- 3. RPC function for atomic page increment (avoids race conditions)
+-- 3. RPC functions for atomic page operations (avoids race conditions)
+
+-- Simple increment (used after translation completes)
 CREATE OR REPLACE FUNCTION public.increment_pages_used(user_id UUID, increment INTEGER)
 RETURNS void AS $$
 BEGIN
   UPDATE public.user_profiles
   SET pages_used = pages_used + increment
   WHERE id = user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Atomic reserve-and-increment: checks limit then increments in one transaction.
+-- Returns (success, pages_used, pages_limit). If limit exceeded, does nothing.
+CREATE OR REPLACE FUNCTION public.reserve_pages_atomic(
+  p_user_id UUID,
+  p_increment INTEGER
+) RETURNS TABLE(success BOOLEAN, pages_used INTEGER, pages_limit INTEGER) AS $$
+DECLARE
+  v_used  INTEGER;
+  v_limit INTEGER;
+BEGIN
+  SELECT up.pages_used, up.pages_limit
+    INTO v_used, v_limit
+    FROM public.user_profiles up
+   WHERE up.id = p_user_id
+     FOR UPDATE;  -- row-level lock prevents concurrent updates
+
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 0, 0;
+    RETURN;
+  END IF;
+
+  IF v_used + p_increment > v_limit THEN
+    RETURN QUERY SELECT false, v_used, v_limit;
+    RETURN;
+  END IF;
+
+  UPDATE public.user_profiles
+     SET pages_used = pages_used + p_increment
+   WHERE id = p_user_id
+  RETURNING user_profiles.pages_used, user_profiles.pages_limit
+    INTO v_used, v_limit;
+
+  RETURN QUERY SELECT true, v_used, v_limit;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 

@@ -196,14 +196,9 @@ router.get('/me', requireAuth, async (req, res) => {
     console.warn('Profile REST fetch failed:', e.message);
   }
 
-  // Get fresh pages_used from app_metadata (source of truth)
-  let freshPagesUsed = req.user.pagesUsed;
-  try {
-    const authUser = await supabase.auth.admin.getUserById(req.user.id);
-    if (authUser.data?.user?.app_metadata) {
-      freshPagesUsed = authUser.data.user.app_metadata.pages_used || 0;
-    }
-  } catch {}
+  // Get fresh pages from user_profiles (source of truth — atomically updated)
+  const freshPagesUsed  = profile?.pages_used  ?? req.user.pagesUsed;
+  const freshPagesLimit = profile?.pages_limit ?? req.user.pagesLimit;
 
   res.json({
     id: req.user.id,
@@ -212,7 +207,7 @@ router.get('/me', requireAuth, async (req, res) => {
     role: req.user.role,
     plan: req.user.plan,
     pagesUsed: freshPagesUsed,
-    pagesLimit: req.user.pagesLimit,
+    pagesLimit: freshPagesLimit,
   });
 });
 

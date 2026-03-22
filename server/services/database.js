@@ -89,48 +89,51 @@ export async function uploadOutputFile(jobId, filename, filePath) {
   return data.publicUrl;
 }
 
-// ─── User profile helpers (uses Supabase Auth app_metadata — no extra table needed) ──
+// ─── User profile helpers (source of truth: user_profiles table) ─────────────
 
 export async function dbGetUserProfile(userId) {
-  const { data, error } = await supabase.auth.admin.getUserById(userId);
+  const { data, error } = await supabase
+    .from('user_profiles')
+    .select('pages_used, pages_limit, role')
+    .eq('id', userId)
+    .single();
   if (error) throw error;
-  const meta = data?.user?.app_metadata || {};
   return {
-    pages_used: meta.pages_used || 0,
-    pages_limit: meta.pages_limit || 500,
-    role: meta.role || 'user',
+    pages_used: data.pages_used || 0,
+    pages_limit: data.pages_limit || 500,
+    role: data.role || 'user',
   };
 }
 
 /**
- * Check remaining pages and reserve them using Supabase Auth app_metadata.
+ * Atomically check and reserve pages in one SQL transaction via RPC.
+ * Uses SELECT FOR UPDATE + conditional UPDATE — no TOCTOU race condition.
  * Returns { success: true, remaining } or { success: false, remaining, needed }.
  */
 export async function dbReservePages(userId, pagesNeeded) {
-  const profile = await dbGetUserProfile(userId);
-  const remaining = (profile.pages_limit || 500) - (profile.pages_used || 0);
-  if (pagesNeeded > remaining) {
-    return { success: false, remaining, needed: pagesNeeded };
+  const { data, error } = await supabase.rpc('reserve_pages_atomic', {
+    p_user_id: userId,
+    p_increment: pagesNeeded,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) throw new Error('reserve_pages_atomic returned no result');
+  const remaining = (row.pages_limit || 500) - (row.pages_used || 0);
+  if (!row.success) {
+    const before = (row.pages_limit || 500) - ((row.pages_used || 0) - pagesNeeded);
+    return { success: false, remaining: row.pages_used !== undefined ? (row.pages_limit - row.pages_used) : 0, needed: pagesNeeded };
   }
-  // Increment pages_used in app_metadata
-  await dbIncrementPages(userId, pagesNeeded);
-  return { success: true, remaining: remaining - pagesNeeded, reserved: true };
+  return { success: true, remaining, reserved: true };
 }
 
 export async function dbIncrementPages(userId, pages) {
-  // Fetch current pages_used from app_metadata
-  const { data, error: fetchErr } = await supabase.auth.admin.getUserById(userId);
-  if (fetchErr) {
-    console.error('Failed to fetch user for page increment:', fetchErr.message);
-    throw fetchErr;
-  }
-  const currentUsed = data?.user?.app_metadata?.pages_used || 0;
-  const { error: updateErr } = await supabase.auth.admin.updateUserById(userId, {
-    app_metadata: { pages_used: currentUsed + pages },
+  const { error } = await supabase.rpc('increment_pages_used', {
+    user_id: userId,
+    increment: pages,
   });
-  if (updateErr) {
-    console.error('Failed to update pages_used in app_metadata:', updateErr.message);
-    throw updateErr;
+  if (error) {
+    console.error('Failed to increment pages_used:', error.message);
+    throw error;
   }
 }
 
