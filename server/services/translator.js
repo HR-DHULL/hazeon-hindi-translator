@@ -274,85 +274,86 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
   return fixMissingMCQLabels(verified);
 }
 
-// ── Gemini paragraph translation (batched, rate-limited sequential) ───────────
+// ── Gemini paragraph translation (batched, parallel) ─────────────────────────
 async function translateParagraphsBatched(paragraphs, onProgress) {
   const BATCH_SIZE = 20;
-  // Gemini free tier = 10 RPM → enforce minimum 6s between batch starts.
-  // Sequential (not parallel) to avoid 429 errors that silently keep English.
-  const MIN_BATCH_GAP_MS = 6000;
+  const CONCURRENCY = 5; // Paid API key — run 5 batches in parallel
 
   const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
   const translated = new Array(paragraphs.length).fill('');
 
-  for (let b = 0; b < totalBatches; b++) {
-    const batchStart = Date.now();
-    const start = b * BATCH_SIZE;
-    const batch = paragraphs.slice(start, start + BATCH_SIZE);
+  // Process in windows of CONCURRENCY batches at a time
+  for (let w = 0; w < totalBatches; w += CONCURRENCY) {
+    const window = [];
+    for (let b = w; b < Math.min(w + CONCURRENCY, totalBatches); b++) {
+      window.push(b);
+    }
 
     if (onProgress) {
+      const b = w;
+      const start = b * BATCH_SIZE;
       await onProgress({
         chunk: b + 1,
         totalChunks: totalBatches,
         percent: Math.round((b / totalBatches) * 100),
         status: 'translating',
-        message: `Translating paragraphs ${start + 1}–${Math.min(start + BATCH_SIZE, paragraphs.length)} of ${paragraphs.length}...`,
+        message: `Translating paragraphs ${start + 1}–${Math.min((w + CONCURRENCY) * BATCH_SIZE, paragraphs.length)} of ${paragraphs.length}...`,
       });
     }
 
-    try {
-      const nonEmptyIndices = [];
-      const nonEmptyTexts = [];
-      batch.forEach((p, i) => {
-        if (p.trim()) { nonEmptyIndices.push(i); nonEmptyTexts.push(p); }
-      });
+    await Promise.all(window.map(async (b) => {
+      const start = b * BATCH_SIZE;
+      const batch = paragraphs.slice(start, start + BATCH_SIZE);
 
-      if (nonEmptyTexts.length > 0) {
-        const results = await translateWithGemini(nonEmptyTexts);
-        nonEmptyIndices.forEach((localIdx, ri) => {
-          let t = results[ri] || batch[localIdx];
-          t = applyGlossaryPostProcessing(t, batch[localIdx]);
-          t = applyHindiCorrections(t);
-          translated[start + localIdx] = t;
+      try {
+        const nonEmptyIndices = [];
+        const nonEmptyTexts = [];
+        batch.forEach((p, i) => {
+          if (p.trim()) { nonEmptyIndices.push(i); nonEmptyTexts.push(p); }
         });
-      }
-    } catch (err) {
-      const isRateLimit = err.message.includes('429') || /quota|rate.?limit/i.test(err.message);
-      const isTimeout = err.message.includes('timed out');
-      console.warn(`Gemini batch ${b + 1} ${isTimeout ? 'timed out' : isRateLimit ? 'rate-limited (429)' : `failed: ${err.message}`}. Retrying individually...`);
 
-      if (isRateLimit) await new Promise(r => setTimeout(r, 10000));
+        if (nonEmptyTexts.length > 0) {
+          const results = await translateWithGemini(nonEmptyTexts);
+          nonEmptyIndices.forEach((localIdx, ri) => {
+            let t = results[ri] || batch[localIdx];
+            t = applyGlossaryPostProcessing(t, batch[localIdx]);
+            t = applyHindiCorrections(t);
+            translated[start + localIdx] = t;
+          });
+        }
+      } catch (err) {
+        const isRateLimit = err.message.includes('429') || /quota|rate.?limit/i.test(err.message);
+        const isTimeout = err.message.includes('timed out');
+        console.warn(`Gemini batch ${b + 1} ${isTimeout ? 'timed out' : isRateLimit ? 'rate-limited (429)' : `failed: ${err.message}`}. Retrying individually...`);
 
-      for (let i = 0; i < batch.length; i++) {
-        if (!batch[i].trim()) continue;
-        try {
-          const results = await translateWithGemini([batch[i]]);
-          let t = results[0] || batch[i];
-          t = applyGlossaryPostProcessing(t, batch[i]);
-          t = applyHindiCorrections(t);
-          translated[start + i] = t;
-        } catch (retryErr) {
-          if (/429|quota|rate.?limit/i.test(retryErr.message)) {
-            await new Promise(r => setTimeout(r, 15000));
-            try {
-              const results = await translateWithGemini([batch[i]]);
-              let t = results[0] || batch[i];
-              t = applyGlossaryPostProcessing(t, batch[i]);
-              t = applyHindiCorrections(t);
-              translated[start + i] = t;
-              continue;
-            } catch (_) {}
+        if (isRateLimit) await new Promise(r => setTimeout(r, 5000));
+
+        for (let i = 0; i < batch.length; i++) {
+          if (!batch[i].trim()) continue;
+          try {
+            const results = await translateWithGemini([batch[i]]);
+            let t = results[0] || batch[i];
+            t = applyGlossaryPostProcessing(t, batch[i]);
+            t = applyHindiCorrections(t);
+            translated[start + i] = t;
+          } catch (retryErr) {
+            if (/429|quota|rate.?limit/i.test(retryErr.message)) {
+              await new Promise(r => setTimeout(r, 5000));
+              try {
+                const results = await translateWithGemini([batch[i]]);
+                let t = results[0] || batch[i];
+                t = applyGlossaryPostProcessing(t, batch[i]);
+                t = applyHindiCorrections(t);
+                translated[start + i] = t;
+                continue;
+              } catch (_) {}
+            }
+            console.warn(`  Individual retry failed for paragraph ${start + i}: ${retryErr.message}`);
+            translated[start + i] = batch[i];
           }
-          console.warn(`  Individual retry failed for paragraph ${start + i}: ${retryErr.message}`);
-          translated[start + i] = batch[i];
         }
       }
-    }
-
-    // Enforce minimum gap to stay under 10 RPM Gemini free-tier limit
-    const elapsed = Date.now() - batchStart;
-    if (b < totalBatches - 1 && elapsed < MIN_BATCH_GAP_MS) {
-      await new Promise(r => setTimeout(r, MIN_BATCH_GAP_MS - elapsed));
-    }
+    }));
   }
 
   return translated;
