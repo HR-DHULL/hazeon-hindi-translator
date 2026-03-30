@@ -269,15 +269,16 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
   return fixMissingMCQLabels(verified);
 }
 
-// ── Gemini paragraph translation (batched) ───────────────────────────────────
+// ── Gemini paragraph translation (batched, parallel) ─────────────────────────
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  // Batch size 20: smaller batches keep Gemini focused, reducing skipped questions.
-  // (was 35 — larger batches caused Gemini to silently skip some paragraphs)
   const BATCH_SIZE = 20;
-  const translated = [];
+  // Run 2 batches in parallel — ~1.8x faster while staying within Gemini free-tier limits.
+  const CONCURRENCY = 2;
   const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
+  const translated = new Array(paragraphs.length).fill('');
+  let completedBatches = 0;
 
-  for (let b = 0; b < totalBatches; b++) {
+  const processBatch = async (b) => {
     const start = b * BATCH_SIZE;
     const batch = paragraphs.slice(start, start + BATCH_SIZE);
 
@@ -285,50 +286,53 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
       await onProgress({
         chunk: b + 1,
         totalChunks: totalBatches,
-        percent: Math.round((b / totalBatches) * 100),
+        percent: Math.round((completedBatches / totalBatches) * 100),
         status: 'translating',
         message: `Translating paragraphs ${start + 1}–${Math.min(start + BATCH_SIZE, paragraphs.length)} of ${paragraphs.length}...`,
       });
     }
 
     try {
-      // Filter empty paragraphs — translate non-empty ones only
       const nonEmptyIndices = [];
       const nonEmptyTexts = [];
       batch.forEach((p, i) => {
         if (p.trim()) { nonEmptyIndices.push(i); nonEmptyTexts.push(p); }
       });
 
-      const batchResult = Array(batch.length).fill('');
       if (nonEmptyTexts.length > 0) {
         const results = await translateWithGemini(nonEmptyTexts);
-        nonEmptyIndices.forEach((origIdx, ri) => {
-          let t = results[ri] || batch[origIdx];
-          t = applyGlossaryPostProcessing(t, batch[origIdx]);
+        nonEmptyIndices.forEach((localIdx, ri) => {
+          let t = results[ri] || batch[localIdx];
+          t = applyGlossaryPostProcessing(t, batch[localIdx]);
           t = applyHindiCorrections(t);
-          batchResult[origIdx] = t;
+          translated[start + localIdx] = t;
         });
       }
-      translated.push(...batchResult);
     } catch (err) {
-      // Both timeout and non-timeout failures: retry each paragraph individually.
-      // NEVER silently keep English originals — always attempt individual translation.
       const isTimeout = err.message.includes('timed out');
-      console.warn(`Gemini batch ${b + 1} ${isTimeout ? 'timed out' : `failed: ${err.message}`}. Retrying each paragraph individually...`);
+      console.warn(`Gemini batch ${b + 1} ${isTimeout ? 'timed out' : `failed: ${err.message}`}. Retrying individually...`);
       for (let i = 0; i < batch.length; i++) {
-        if (!batch[i].trim()) { translated.push(''); continue; }
+        if (!batch[i].trim()) continue;
         try {
           const results = await translateWithGemini([batch[i]]);
           let t = results[0] || batch[i];
           t = applyGlossaryPostProcessing(t, batch[i]);
           t = applyHindiCorrections(t);
-          translated.push(t);
+          translated[start + i] = t;
         } catch (retryErr) {
           console.warn(`  Individual retry failed for paragraph ${start + i}: ${retryErr.message}`);
-          translated.push(batch[i]); // last resort: keep original
+          translated[start + i] = batch[i];
         }
       }
     }
+    completedBatches++;
+  };
+
+  // Process in groups of CONCURRENCY
+  for (let g = 0; g < totalBatches; g += CONCURRENCY) {
+    const group = [];
+    for (let i = g; i < Math.min(g + CONCURRENCY, totalBatches); i++) group.push(i);
+    await Promise.all(group.map(processBatch));
   }
 
   return translated;
