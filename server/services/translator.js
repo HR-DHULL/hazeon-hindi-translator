@@ -158,6 +158,7 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
     systemInstruction: systemPrompt,
     generationConfig: {
       temperature: 0.1,
+      thinkingConfig: { thinkingBudget: 0 },
     },
   });
 
@@ -374,7 +375,7 @@ async function forceTranslateSingle(text) {
   const model = genAI.getGenerativeModel({
     model: GEMINI_MODEL,
     systemInstruction: `Translate the given text fully into Hindi (Devanagari script) for UPSC exam material. Keep only: acronyms (UPSC, GDP, RBI, etc.), MCQ option labels (a)(b)(c)(d), single-letter variables (A, B, C), Roman numerals (I, II, III), numbers, and math formulas. Translate EVERYTHING else. Output ONLY the Hindi translation — no explanations.`,
-    generationConfig: { temperature: 0.0 },
+    generationConfig: { temperature: 0.0, thinkingConfig: { thinkingBudget: 0 } },
   });
   const result = await Promise.race([
     model.generateContent(`Translate to Hindi:\n${safeText}`),
