@@ -30,7 +30,7 @@ RULES:
 7. Numbers, dates, years, math formulas, percentages: keep unchanged.
 8. ⚠ MANDATORY: Translate EVERY English sentence, question stem, and option text into Hindi. If you see an English question like "Which of the following..." or "Consider the following statements..." — you MUST translate it. Leaving any English sentence untranslated is a critical error.
 9. Transliterate all person names and place names to Devanagari script: Annie Besant → एनी बेसेंट, A.O. Hume → ए.ओ. ह्यूम, Sarojini Naidu → सरोजिनी नायडू, Tilak → तिलक, Bombay → बंबई/मुंबई.
-10. Exam source citation tags like [UPPSC 2015], [UP Lower Sub. 2004] appear as placeholders <<<TAG0>>> etc. — keep these placeholders EXACTLY as-is in your output.
+10. Exam source citation tags like [UPPSC 2015], [UP Lower Sub. 2004] appear as placeholders EXAMREF0ENDREF, EXAMREF1ENDREF etc. — keep these placeholders EXACTLY as-is in your output. Do NOT translate, modify, or remove them.
 11. Output ONLY the translated text. No explanations, notes, or comments.`;
 
 // Precompute all prompts once at startup — enables Gemini implicit prefix caching
@@ -94,9 +94,6 @@ function hasUntranslatedEnglish(text, original) {
 // must NEVER be sent to Gemini — they get transliterated into wrong Hindi.
 // We replace them with placeholders before translation and restore after.
 
-const TAG_PLACEHOLDER_PREFIX = '<<<TAG';
-const TAG_PLACEHOLDER_SUFFIX = '>>>';
-
 /** Matches exam source citation tags, e.g. [UPPSC 2015] [UP Lower Sub. 2004] */
 const EXAM_TAG_REGEX = /\[([A-Z][^\]]{1,60}(?:19|20)\d{2}[^\]]*)\]/g;
 
@@ -105,17 +102,16 @@ function protectExamTags(text) {
   const protected_ = text.replace(EXAM_TAG_REGEX, (match) => {
     const idx = tags.length;
     tags.push(match);
-    return `${TAG_PLACEHOLDER_PREFIX}${idx}${TAG_PLACEHOLDER_SUFFIX}`;
+    // Use EXAMREF format — looks like plain text, Gemini won't modify it
+    return `EXAMREF${idx}ENDREF`;
   });
   return { protected: protected_, tags };
 }
 
 function restoreExamTags(text, tags) {
   if (tags.length === 0) return text;
-  return text.replace(
-    new RegExp(`${TAG_PLACEHOLDER_PREFIX}(\\d+)${TAG_PLACEHOLDER_SUFFIX}`, 'g'),
-    (_, idx) => tags[parseInt(idx, 10)] ?? ''
-  );
+  // Handle both clean EXAMREF0ENDREF and any variants Gemini might produce
+  return text.replace(/EXAMREF(\d+)ENDREF/g, (_, idx) => tags[parseInt(idx, 10)] ?? '');
 }
 
 /**
