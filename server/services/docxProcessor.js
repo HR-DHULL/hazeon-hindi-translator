@@ -45,10 +45,13 @@ function runIsBold(runXml) {
 /**
  * Replace paragraph texts in DOCX XML with translated paragraphs (1-to-1 mapping).
  *
- * Smart run selection: instead of always putting text in the first run,
- * we put text in the LONGEST run by character count. This preserves the
- * dominant formatting (e.g. if the paragraph has a short bold label + long
- * normal body text, the translated text uses the normal formatting).
+ * Works at the <w:r> run level (not just <w:t>) so we can inspect bold formatting.
+ * Target run selection:
+ *   1. Prefer the longest NON-BOLD run — this is the body text, not the label.
+ *   2. If all runs are bold (e.g. a heading), fall back to the longest run overall.
+ * All other runs are emptied. This preserves the dominant body-text formatting
+ * and avoids making entire translated paragraphs bold just because the question
+ * number label "Q.1" happened to be the longest run.
  */
 function replaceParagraphTexts(xml, translatedParagraphs) {
   let paraIndex = 0;
@@ -56,15 +59,21 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
   const modified = xml.replace(
     /<w:p[\s>][\s\S]*?<\/w:p>/g,
     (pBlock) => {
-      // Collect all <w:t> elements with their text and position
-      const textRuns = [];
-      let idx = 0;
-      pBlock.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (match, attrs, text, offset) => {
-        textRuns.push({ idx: idx++, text, attrs, offset });
-        return match;
+      // Collect all <w:r> runs that contain a <w:t> element
+      const runs = [];
+      pBlock.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, (rBlock) => {
+        const tMatch = rBlock.match(/<w:t([^>]*)>([^<]*)<\/w:t>/);
+        if (tMatch) {
+          runs.push({
+            tAttrs: tMatch[1],
+            text: tMatch[2],
+            isBold: runIsBold(rBlock),
+          });
+        }
+        return rBlock;
       });
 
-      const originalText = textRuns.map(r => r.text).join('').trim();
+      const originalText = runs.map(r => r.text).join('').trim();
 
       // Skip paragraphs with no text
       if (!originalText) return pBlock;
@@ -72,35 +81,50 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
       // If we've run out of translated paragraphs, keep original
       if (paraIndex >= translatedParagraphs.length) return pBlock;
 
-      const translatedLine = translatedParagraphs[paraIndex];
+      let translatedLine = translatedParagraphs[paraIndex];
       paraIndex++;
 
-      // Find the run with the most text — that run's formatting represents
-      // the dominant style of the paragraph (body text, not label).
-      let longestRunIdx = 0;
-      let longestLen = 0;
-      for (const run of textRuns) {
-        if (run.text.trim().length > longestLen) {
-          longestLen = run.text.trim().length;
-          longestRunIdx = run.idx;
-        }
+      // If this paragraph uses Word's automatic list numbering (<w:numPr>), the letter
+      // label (a, b, c, d) is already rendered by the list style — strip any manual
+      // (a)/(b)/(c)/(d) prefix from the translated text to avoid double labels like
+      // "a)  (a) 1 और 2 केवल".
+      if (/<w:numPr/.test(pBlock)) {
+        translatedLine = translatedLine.replace(/^\([a-d]\)\s+/i, '');
       }
 
-      // Put ALL translated text in the longest run, empty all others
-      let currentIdx = 0;
-      const newBlock = pBlock.replace(
-        /<w:t([^>]*)>([^<]*)<\/w:t>/g,
-        (match, attrs, _text) => {
-          const thisIdx = currentIdx++;
-          if (thisIdx === longestRunIdx) {
-            const spaceAttr = attrs.includes('xml:space')
-              ? attrs
-              : ` xml:space="preserve"${attrs}`;
-            return `<w:t${spaceAttr}>${escapeXml(translatedLine)}</w:t>`;
-          }
-          return `<w:t${attrs}></w:t>`;
+      // Find target run: prefer longest non-bold run (body text over label).
+      // Fallback: longest run overall (for all-bold paragraphs like headings).
+      let targetIdx = -1;
+      let maxNonBoldLen = 0;
+      let maxOverallLen = 0;
+      let maxOverallIdx = 0;
+
+      for (let i = 0; i < runs.length; i++) {
+        const len = runs[i].text.trim().length;
+        if (len > maxOverallLen) { maxOverallLen = len; maxOverallIdx = i; }
+        if (!runs[i].isBold && len > maxNonBoldLen) { maxNonBoldLen = len; targetIdx = i; }
+      }
+      if (targetIdx === -1) targetIdx = maxOverallIdx;
+
+      // Replace: put translated text in targetIdx run, empty all others
+      let runCount = 0;
+      const newBlock = pBlock.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, (rBlock) => {
+        const tMatch = rBlock.match(/<w:t([^>]*)>([^<]*)<\/w:t>/);
+        if (!tMatch) return rBlock; // run has no <w:t>, keep as-is (e.g. image run)
+
+        const thisIdx = runCount++;
+        if (thisIdx === targetIdx) {
+          const tAttrs = tMatch[1];
+          const spaceAttr = tAttrs.includes('xml:space')
+            ? tAttrs
+            : ` xml:space="preserve"${tAttrs}`;
+          return rBlock.replace(
+            /<w:t[^>]*>[^<]*<\/w:t>/,
+            `<w:t${spaceAttr}>${escapeXml(translatedLine)}</w:t>`
+          );
         }
-      );
+        return rBlock.replace(/<w:t[^>]*>[^<]*<\/w:t>/, `<w:t${tMatch[1]}></w:t>`);
+      });
 
       return newBlock;
     }

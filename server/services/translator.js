@@ -18,18 +18,20 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
 // Base prompt — glossary is injected separately via buildSystemPrompt()
-const UPSC_BASE_PROMPT = `Translate UPSC/HCS exam material from English to formal Hindi (राजभाषा). Use the exact language of official UPSC question papers and Lok Sabha proceedings.
+const UPSC_BASE_PROMPT = `You are an expert Hindi translator for UPSC/HCS competitive exam material. Translate everything from English to formal Hindi (राजभाषा) using the exact language of official UPSC question papers and Lok Sabha proceedings.
 
 RULES:
 1. NEVER transliterate. Use proper Hindi: राजकोषीय (fiscal), न्यायपालिका (judiciary), अध्यादेश (ordinance), अधिकरण (tribunal).
-2. Keep abbreviations as-is: UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, PIL, CAG, DNA, pH, AM, PM.
+2. Keep abbreviations as-is: UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, PIL, CAG, DNA, pH, AM, PM, WTO, UNESCO, UNICEF, WHO, NDA, BJP, INC, etc.
 3. Use the glossary terms exactly as given — they override your default choices.
 4. MCQ labels: (a)(b)(c)(d) stay in English. One option per line. Never drop or merge labels. Use कूट (not कोड), कीजिए (not करें), चुनिए (not चुनें), उपर्युक्त (not उपरोक्त).
 5. Single letters as variables/labels (A, B, C in match-the-following; P, Q, R in puzzles): keep as English. WRONG: ए-3, बी-2 → CORRECT: A-3, B-2.
 6. Roman numerals I, II, III: keep as-is. Never translate I as मैं.
 7. Numbers, dates, years, math formulas, percentages: keep unchanged.
-8. Translate ALL English text — no English sentences left in output. Only exceptions: abbreviations, option labels, single-letter variables, formulas.
-9. Output ONLY the translated text. No explanations or comments.`;
+8. ⚠ MANDATORY: Translate EVERY English sentence, question stem, and option text into Hindi. If you see an English question like "Which of the following..." or "Consider the following statements..." — you MUST translate it. Leaving any English sentence untranslated is a critical error.
+9. Transliterate all person names and place names to Devanagari script: Annie Besant → एनी बेसेंट, A.O. Hume → ए.ओ. ह्यूम, Sarojini Naidu → सरोजिनी नायडू, Tilak → तिलक, Bombay → बंबई/मुंबई.
+10. Exam source citation tags like [UPPSC 2015], [UP Lower Sub. 2004] appear as placeholders <<<TAG0>>> etc. — keep these placeholders EXACTLY as-is in your output.
+11. Output ONLY the translated text. No explanations, notes, or comments.`;
 
 // Precompute all prompts once at startup — enables Gemini implicit prefix caching
 // (same string object reused → API caches KV across calls → much faster)
@@ -49,21 +51,66 @@ function buildSystemPrompt(subject = null) {
 
 // ── Gemini translation ───────────────────────────────────────────────────────
 
+// Abbreviations/acronyms that are legitimately kept as English in Hindi output
+const ALLOWED_ENGLISH = /^(UPSC|IAS|HCS|GDP|RBI|GST|SEBI|ISRO|UN|NATO|CRR|SLR|FDI|PIL|CAG|ATM|EMI|DNA|RNA|NOTA|NCL|CSR|IMF|NGO|NRI|UNESCO|UNICEF|WHO|FIFA|BRICS|IGMDP|OMR|CSAT|PCS|NDA|BJP|INC|CBI|ED|IPC|CPC|NITI|NHRC|NHPC|NDMA|NCPCR|UIDAI|RTE|RTI|CAA|NRC|NPR|JPC|PAC|ECI|CVC|CIC|pH|UV|AM|PM|MCQ|DOCX|PDF|WTO|ILO|IAEA|OPCW|ICC|ICJ|UNSC|UNGA|UNDP|FAO|IDA|IBRD|ADB|NDB|AIIB|IMF|WB|REC|NABARD|SIDBI|MUDRA|MSME|PSU|LPG|CNG|VLCC|ULCC|LED|CFL|PCB|CPU|GPU|SSD|HDD|USB|GPS|GSM|CDMA|LTE|OLED|AMOLED|LCD|IP|HTTP|HTTPS|TCP|UDP|VPN|API|SQL|XML|HTML|CSS|JS|TS|AI|ML|NLP|IoT|AR|VR|MR|XR|EV|ICE|CAFE|TRAI|IRDA|PFRDA|SEBI|IRDAI|NHB|IBC|NCLT|NCLAT|CCI|SAT|TDSAT|APTEL|CERC|CESTAT|ITAT|NFRA|ICAI|ICSI|ICMAI)$/i;
+
 /** Check if text has significant untranslated English content */
 function hasUntranslatedEnglish(text, original) {
   if (!text || !original) return false;
   // Skip if it's a math formula or symbol-heavy line
   if (/^[\d\s\(\)\.\-\+\*\/=×÷%<>a-dA-D,;:?!]+$/.test(text.trim())) return false;
-  const engWords = (text.match(/\b[A-Za-z]{4,}\b/g) || []).filter(w =>
-    !/^(UPSC|IAS|HCS|GDP|RBI|GST|SEBI|ISRO|UN|NATO|CRR|SLR|FDI|PIL|CAG|ATM|EMI|DNA|RNA|NOTA|NCL|CSR|IMF|NGO|NRI|UNESCO|UNICEF|WHO|FIFA|BRICS|IGMDP|OMR|CSAT|PCS|pH|UV|AM|PM|MCQ|DOCX|PDF)$/i.test(w)
+
+  // Count English words (3+ chars to catch short words like "the", "are", "has", "not")
+  const engWords = (text.match(/\b[A-Za-z]{3,}\b/g) || []).filter(w => !ALLOWED_ENGLISH.test(w));
+
+  if (engWords.length === 0) return false;
+
+  const engCharCount = engWords.join('').length;
+  const totalChars = text.replace(/\s/g, '').length;
+  if (totalChars === 0) return false;
+
+  const engRatio = engCharCount / totalChars;
+
+  // Detect "Term: definition" pattern — e.g. "Barid: गुमचर अधिकारी" or "Waqf: सुल्तान की संपत्ति"
+  // These are single Arabic/Persian/English terms followed by a Hindi definition.
+  // A single English word before a colon at the start of text = needs transliteration.
+  const startsWithEnglishTerm = /^[A-Za-z][A-Za-z\-]{2,}\s*[:।]/.test(text.trim());
+
+  // Trigger retry if:
+  // - Single English term before colon (historical term pattern)
+  // - OR 2+ non-allowed English words AND ratio > 20%
+  // - OR any complete English sentence detected (5+ consecutive words)
+  const hasEnglishSentence = /\b[A-Z][a-z]+(\s+[a-zA-Z]+){4,}/.test(text);
+  return startsWithEnglishTerm || (engWords.length >= 2 && engRatio > 0.20) || hasEnglishSentence;
+}
+
+// ── Exam source tag protection ────────────────────────────────────────────────
+// Tags like [UPPSC 2015], [UP Lower Sub. 2004], [UP R.O./A.R.O. (Mains) 2014]
+// must NEVER be sent to Gemini — they get transliterated into wrong Hindi.
+// We replace them with placeholders before translation and restore after.
+
+const TAG_PLACEHOLDER_PREFIX = '<<<TAG';
+const TAG_PLACEHOLDER_SUFFIX = '>>>';
+
+/** Matches exam source citation tags, e.g. [UPPSC 2015] [UP Lower Sub. 2004] */
+const EXAM_TAG_REGEX = /\[([A-Z][^\]]{1,60}(?:19|20)\d{2}[^\]]*)\]/g;
+
+function protectExamTags(text) {
+  const tags = [];
+  const protected_ = text.replace(EXAM_TAG_REGEX, (match) => {
+    const idx = tags.length;
+    tags.push(match);
+    return `${TAG_PLACEHOLDER_PREFIX}${idx}${TAG_PLACEHOLDER_SUFFIX}`;
+  });
+  return { protected: protected_, tags };
+}
+
+function restoreExamTags(text, tags) {
+  if (tags.length === 0) return text;
+  return text.replace(
+    new RegExp(`${TAG_PLACEHOLDER_PREFIX}(\\d+)${TAG_PLACEHOLDER_SUFFIX}`, 'g'),
+    (_, idx) => tags[parseInt(idx, 10)] ?? ''
   );
-  // If more than 40% of content is English words, it's likely untranslated
-  if (engWords.length >= 5) {
-    const engCharCount = engWords.join('').length;
-    const totalChars = text.replace(/\s/g, '').length;
-    return engCharCount / totalChars > 0.3;
-  }
-  return false;
 }
 
 /**
@@ -74,9 +121,15 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
   if (paragraphs.length === 0) return [];
   if (!genAI) throw new Error('GEMINI_API_KEY is not configured. Set it in environment variables.');
 
-  // Number each paragraph so we can split the output reliably
-  const numbered = paragraphs
-    .map((p, i) => `[${i + 1}] ${p}`)
+  // Protect exam source tags (e.g. [UPPSC 2015], [UP Lower Sub. 2004]) before sending
+  // to Gemini — they get incorrectly transliterated otherwise.
+  const tagStores = paragraphs.map(p => protectExamTags(p));
+  const protectedParagraphs = tagStores.map(t => t.protected);
+
+  // Number each paragraph with unique delimiters unlikely to appear in UPSC content.
+  // Using <<<P1>>> instead of [1] to avoid collision with "[Article 1]", "[Entry 2]" etc.
+  const numbered = protectedParagraphs
+    .map((p, i) => `<<<P${i + 1}>>> ${p}`)
     .join('\n\n');
 
   // ── Context-aware disambiguation + subject detection ─────────────────────
@@ -99,12 +152,11 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
     model: GEMINI_MODEL,
     systemInstruction: systemPrompt,
     generationConfig: {
-      temperature: 0.2,
-      thinkingConfig: { thinkingBudget: 0 },
+      temperature: 0.1,
     },
   });
 
-  const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each numbered paragraph below from English to Hindi for UPSC/HCS exam material. Preserve the [N] number prefix on each paragraph in your output. TRANSLATE EVERYTHING INTO HINDI — do NOT leave any English text untranslated except abbreviations and math formulas.\n\n${numbered}`;
+  const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each paragraph below from English to Hindi for UPSC/HCS exam material. Each paragraph starts with <<<PN>>> (e.g., <<<P1>>>, <<<P2>>>). Preserve that exact prefix in your output.\n\nCRITICAL: Translate EVERY English word/sentence into Hindi. Do NOT leave ANY complete English sentence or question untranslated. The only allowed English in output: acronyms (UPSC, GDP, RBI...), MCQ labels (a)(b)(c)(d), single-letter variables, numbers, and math formulas.\n\n${numbered}`;
 
   // 45-second timeout per batch using Promise.race (more reliable than AbortController with Gemini SDK)
   const timeoutMs = 45000;
@@ -114,8 +166,8 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
   const result = await Promise.race([model.generateContent(userMsg), timeoutPromise]);
   const rawOutput = result.response.text();
 
-  // Split on [1], [2], [3]... markers
-  const parts = rawOutput.split(/\n*\[(\d+)\]\s*/);
+  // Split on <<<P1>>>, <<<P2>>>... markers
+  const parts = rawOutput.split(/\n*<<<P(\d+)>>>\s*/);
   const parsed = Array(paragraphs.length).fill('');
   for (let i = 1; i < parts.length - 1; i += 2) {
     const idx = parseInt(parts[i], 10) - 1;
@@ -124,7 +176,7 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
     }
   }
 
-  // Fallback: if Gemini didn't number properly for single paragraph
+  // Fallback: if Gemini didn't use markers properly (e.g. for single paragraph)
   const hasEmpty = parsed.some((r, i) => !r && paragraphs[i].trim());
   if (hasEmpty && paragraphs.length === 1) {
     return [rawOutput.trim()];
@@ -153,7 +205,8 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
     }
   }
 
-  return parsed.map((t, i) => t || paragraphs[i]); // keep original as last resort
+  // Restore exam source tags into each translated paragraph
+  return parsed.map((t, i) => restoreExamTags(t || paragraphs[i], tagStores[i].tags));
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -208,16 +261,19 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
 /**
  * Translate an array of paragraphs preserving 1-to-1 order.
  * Used for DOCX clone-and-replace.
+ * Two-pass: first pass translates all batches, second pass fixes any remaining English.
  */
 export async function translateParagraphs(paragraphs, bookContext = '', onProgress) {
   const translated = await translateParagraphsBatched(paragraphs, onProgress);
-  return fixMissingMCQLabels(translated);
+  const verified  = await verifyAndFixTranslations(paragraphs, translated, onProgress);
+  return fixMissingMCQLabels(verified);
 }
 
 // ── Gemini paragraph translation (batched) ───────────────────────────────────
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  // Batch size 35: fits ~60 batches for 100-page docs within Vercel's 300s limit
-  const BATCH_SIZE = 35;
+  // Batch size 20: smaller batches keep Gemini focused, reducing skipped questions.
+  // (was 35 — larger batches caused Gemini to silently skip some paragraphs)
+  const BATCH_SIZE = 20;
   const translated = [];
   const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
 
@@ -255,32 +311,100 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
       }
       translated.push(...batchResult);
     } catch (err) {
+      // Both timeout and non-timeout failures: retry each paragraph individually.
+      // NEVER silently keep English originals — always attempt individual translation.
       const isTimeout = err.message.includes('timed out');
-      if (isTimeout) {
-        // Timeout — skip retries, keep originals to avoid stalling for minutes
-        console.warn(`Gemini batch ${b + 1} timed out — keeping originals for this batch`);
-        translated.push(...batch);
-      } else {
-        // Non-timeout failure — retry each paragraph individually
-        console.warn(`Gemini batch ${b + 1} failed: ${err.message}. Retrying individually...`);
-        for (let i = 0; i < batch.length; i++) {
-          if (!batch[i].trim()) { translated.push(''); continue; }
-          try {
-            const results = await translateWithGemini([batch[i]]);
-            let t = results[0] || batch[i];
-            t = applyGlossaryPostProcessing(t, batch[i]);
-            t = applyHindiCorrections(t);
-            translated.push(t);
-          } catch (retryErr) {
-            console.warn(`  Individual retry failed for paragraph ${start + i}: ${retryErr.message}`);
-            translated.push(batch[i]); // last resort: keep original
-          }
+      console.warn(`Gemini batch ${b + 1} ${isTimeout ? 'timed out' : `failed: ${err.message}`}. Retrying each paragraph individually...`);
+      for (let i = 0; i < batch.length; i++) {
+        if (!batch[i].trim()) { translated.push(''); continue; }
+        try {
+          const results = await translateWithGemini([batch[i]]);
+          let t = results[0] || batch[i];
+          t = applyGlossaryPostProcessing(t, batch[i]);
+          t = applyHindiCorrections(t);
+          translated.push(t);
+        } catch (retryErr) {
+          console.warn(`  Individual retry failed for paragraph ${start + i}: ${retryErr.message}`);
+          translated.push(batch[i]); // last resort: keep original
         }
       }
     }
   }
 
-  return fixMissingMCQLabels(translated);
+  return translated;
+}
+
+// ── Two-pass verification ─────────────────────────────────────────────────────
+
+/**
+ * Force-translate a single paragraph using a minimal, high-priority prompt.
+ * Used for stubborn paragraphs that still have English after the first pass.
+ */
+async function forceTranslateSingle(text) {
+  if (!genAI) throw new Error('GEMINI_API_KEY not configured');
+
+  // Protect exam tags before sending
+  const { protected: safeText, tags } = protectExamTags(text);
+
+  const model = genAI.getGenerativeModel({
+    model: GEMINI_MODEL,
+    systemInstruction: `Translate the given text fully into Hindi (Devanagari script) for UPSC exam material. Keep only: acronyms (UPSC, GDP, RBI, etc.), MCQ option labels (a)(b)(c)(d), single-letter variables (A, B, C), Roman numerals (I, II, III), numbers, and math formulas. Translate EVERYTHING else. Output ONLY the Hindi translation — no explanations.`,
+    generationConfig: { temperature: 0.0 },
+  });
+  const result = await Promise.race([
+    model.generateContent(`Translate to Hindi:\n${safeText}`),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('forceTranslate timeout')), 25000)),
+  ]);
+  let out = result.response.text().trim();
+  out = restoreExamTags(out, tags);   // restore before post-processing
+  out = applyGlossaryPostProcessing(out, text);
+  out = applyHindiCorrections(out);
+  return out;
+}
+
+/**
+ * Second pass: find any translated paragraphs that still contain English and re-translate them.
+ * This catches paragraphs that survived the first pass + retries unchanged.
+ */
+async function verifyAndFixTranslations(originals, translated, onProgress) {
+  // Find paragraphs that still have untranslated English content
+  const problematic = [];
+  for (let i = 0; i < translated.length; i++) {
+    if (originals[i]?.trim() && translated[i] && hasUntranslatedEnglish(translated[i], originals[i])) {
+      problematic.push(i);
+    }
+  }
+
+  if (problematic.length === 0) {
+    console.log('  Two-pass review: all paragraphs look fully translated ✓');
+    return translated;
+  }
+
+  console.log(`  Two-pass review: ${problematic.length} paragraphs still contain English — force-translating...`);
+
+  if (onProgress) {
+    await onProgress({
+      status: 'reviewing',
+      message: `Second pass: fixing ${problematic.length} paragraphs with remaining English...`,
+    });
+  }
+
+  const result = [...translated];
+  for (const idx of problematic) {
+    try {
+      const fixed = await forceTranslateSingle(originals[idx]);
+      if (fixed && !hasUntranslatedEnglish(fixed, originals[idx])) {
+        result[idx] = fixed;
+        console.log(`    ✓ Fixed paragraph ${idx}`);
+      } else {
+        console.warn(`    ✗ Paragraph ${idx} still has English after force-translate`);
+      }
+    } catch (e) {
+      console.warn(`    Force-translate failed for paragraph ${idx}: ${e.message}`);
+    }
+  }
+
+  return result;
 }
 
 /**

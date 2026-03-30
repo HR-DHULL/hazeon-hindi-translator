@@ -25,11 +25,19 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     // Step 1: Parse
     await emit({ progress: 5, message: 'Parsing document...' });
     const parsed = await parseFile(filePath);
+    const pageCount = parsed.pageCount;
+    const pageWarningMsg = pageCount > 80
+      ? `⚠ Large document (${pageCount} pages) — translation may timeout. Recommend splitting into 30-page files.`
+      : pageCount > 30
+      ? `Note: ${pageCount} pages detected — best accuracy is under 30 pages. Translation will proceed.`
+      : null;
+
     await emit({
       progress: 10,
-      message: `Parsed ${parsed.pageCount} page(s). Preparing for translation...`,
-      pageCount: parsed.pageCount,
+      message: pageWarningMsg || `Parsed ${pageCount} page(s). Preparing for translation...`,
+      pageCount,
       charCount: parsed.text.length,
+      pageWarning: pageWarningMsg,
     });
 
     // Atomically reserve pages to prevent TOCTOU race condition
@@ -37,10 +45,10 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     let pagesReserved = false;
     if (userRole !== 'admin' && userId) {
       try {
-        const reservation = await dbReservePages(userId, parsed.pageCount);
+        const reservation = await dbReservePages(userId, pageCount);
         if (!reservation.success) {
           const msg = reservation.remaining !== undefined
-            ? `Page limit would be exceeded. You have ${reservation.remaining} page(s) remaining but this document has ${parsed.pageCount} page(s). Contact admin to increase your limit.`
+            ? `Page limit would be exceeded. You have ${reservation.remaining} page(s) remaining but this document has ${pageCount} page(s). Contact admin to increase your limit.`
             : 'Page limit would be exceeded. Contact admin to increase your limit.';
           throw new Error(msg);
         }

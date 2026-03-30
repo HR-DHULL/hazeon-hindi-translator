@@ -24,9 +24,21 @@ function FileUpload({ onUploadComplete }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [pdfWarning, setPdfWarning] = useState(false);
+  const [pageWarning, setPageWarning] = useState(null);
   const [bookContext, setBookContext] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef(null);
+
+  // Estimate page count from file size.
+  // Typical UPSC MCQ DOCX: ~25–40 KB per page of dense question content.
+  const estimatePages = (bytes) => Math.round(bytes / 30000);
+
+  const getPageWarning = (file) => {
+    const est = estimatePages(file.size);
+    if (est > 80) return { level: 'error', est, msg: `This file is ~${est} pages — very likely to timeout or produce errors. Split into files of 30 pages or fewer for best results.` };
+    if (est > 30) return { level: 'warn', est, msg: `This file is ~${est} pages. Accuracy is best under 30 pages. Consider splitting chapter-wise for reliable results.` };
+    return null;
+  };
 
   const validateFile = (file) => {
     const ext = '.' + file.name.split('.').pop().toLowerCase();
@@ -47,9 +59,11 @@ function FileUpload({ onUploadComplete }) {
   const handleFile = (file) => {
     setError('');
     setPdfWarning(false);
+    setPageWarning(null);
     const err = validateFile(file);
     if (err) { setError(err); return; }
     setSelectedFile(file);
+    setPageWarning(getPageWarning(file));
   };
 
   const handleDrag = (e) => {
@@ -179,7 +193,7 @@ function FileUpload({ onUploadComplete }) {
                   <p className="text-xs text-slate-400 mt-0.5">{formatSize(selectedFile.size)}</p>
                 </div>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setSelectedFile(null); setError(''); setPdfWarning(false); }}
+                  onClick={(e) => { e.stopPropagation(); setSelectedFile(null); setError(''); setPdfWarning(false); setPageWarning(null); }}
                   className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
                 >
                   <X size={16} />
@@ -193,7 +207,7 @@ function FileUpload({ onUploadComplete }) {
                 <p className="text-sm font-medium text-slate-700">
                   Drag &amp; drop your DOCX file, or <span className="text-indigo-600">browse</span>
                 </p>
-                <p className="text-xs text-slate-400 mt-1">DOCX only · max 100MB · formatting preserved</p>
+                <p className="text-xs text-slate-400 mt-1">DOCX only · Best accuracy: under 30 pages · max 100MB</p>
               </div>
             )}
           </div>
@@ -206,6 +220,28 @@ function FileUpload({ onUploadComplete }) {
                 <p className="text-xs font-semibold text-amber-800">PDF &amp; TXT files are not supported</p>
                 <p className="text-xs text-amber-700 mt-0.5">
                   PDF files cannot preserve formatting. Convert your PDF to DOCX using Microsoft Word or an online converter, then upload.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Page count warning */}
+          {pageWarning && (
+            <div className={`flex items-start gap-2.5 rounded-xl px-4 py-3 border ${
+              pageWarning.level === 'error'
+                ? 'bg-red-50 border-red-200'
+                : 'bg-amber-50 border-amber-200'
+            }`}>
+              <AlertCircle size={15} className={`mt-0.5 shrink-0 ${pageWarning.level === 'error' ? 'text-red-500' : 'text-amber-500'}`} />
+              <div>
+                <p className={`text-xs font-semibold ${pageWarning.level === 'error' ? 'text-red-800' : 'text-amber-800'}`}>
+                  {pageWarning.level === 'error' ? 'File too large for accurate translation' : 'Large file — accuracy may reduce'}
+                </p>
+                <p className={`text-xs mt-0.5 ${pageWarning.level === 'error' ? 'text-red-700' : 'text-amber-700'}`}>
+                  {pageWarning.msg}
+                </p>
+                <p className={`text-xs mt-1 font-medium ${pageWarning.level === 'error' ? 'text-red-800' : 'text-amber-800'}`}>
+                  Recommended: split into chapter-wise files of 20–30 pages for best accuracy.
                 </p>
               </div>
             </div>
