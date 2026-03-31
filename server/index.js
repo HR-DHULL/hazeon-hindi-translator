@@ -87,6 +87,11 @@ if (missing.length > 0) {
     .then((m) => m.ensureTables())
     .catch((err) => console.warn('DB auto-setup skipped:', err.message));
 
+  // ── Cleanup zombie jobs on startup (stuck "processing" from crashed runs) ─
+  import('./services/database.js')
+    .then((m) => m.dbCleanupZombieJobs(15))
+    .catch((err) => console.warn('Zombie cleanup skipped:', err.message));
+
   app.use('/api/auth', authRouter);
   app.use('/api/translate', translateRouter);
 }

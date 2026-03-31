@@ -227,6 +227,37 @@ export async function dbClearGlossary(userId) {
   if (error) throw error;
 }
 
+// ─── Zombie job cleanup ─────────────────────────────────────────────────────
+// Jobs stuck in "processing" for >15 minutes are zombie jobs (server crashed/restarted).
+// Mark them as failed so they don't block the queue.
+
+export async function dbCleanupZombieJobs(maxAgeMinutes = 15) {
+  const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000).toISOString();
+  try {
+    // Find processing jobs older than cutoff that haven't been updated
+    const { data: zombies, error: fetchErr } = await supabase
+      .from('jobs')
+      .select('id, original_name, progress, created_at')
+      .eq('status', 'processing')
+      .lt('created_at', cutoff);
+    if (fetchErr || !zombies?.length) return 0;
+
+    // Mark them as failed
+    const { error: updateErr } = await supabase
+      .from('jobs')
+      .update({ status: 'failed', message: 'Translation timed out (server restarted). Please try again.' })
+      .eq('status', 'processing')
+      .lt('created_at', cutoff);
+    if (updateErr) throw updateErr;
+
+    console.log(`  Cleaned up ${zombies.length} zombie job(s):`, zombies.map(z => `${z.original_name} (${z.progress}%)`).join(', '));
+    return zombies.length;
+  } catch (e) {
+    console.warn('Zombie cleanup failed (non-fatal):', e.message);
+    return 0;
+  }
+}
+
 // ─── Row ↔ Job mappers ───────────────────────────────────────────────────────
 
 function jobToRow(job) {

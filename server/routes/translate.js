@@ -28,6 +28,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { sendTranslationEmail } from '../services/email.js';
 import { clearCache, getCacheStats } from '../services/translationCache.js';
+import { dbCleanupZombieJobs } from '../services/database.js';
 
 
 const router = express.Router();
@@ -407,6 +408,16 @@ router.post('/share/:jobId', requireAuth, async (req, res) => {
       return res.status(503).json({ error: 'Email service not configured. Ask admin to set SMTP credentials.' });
     }
     res.status(500).json({ error: 'Failed to send email. Please try again.' });
+  }
+});
+
+// ─── Admin: cleanup zombie jobs (stuck in "processing") ─────────────────────
+router.post('/cleanup-zombies', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const cleaned = await dbCleanupZombieJobs(10); // 10 min threshold
+    res.json({ message: `Cleaned up ${cleaned} zombie job(s)`, cleaned });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
