@@ -49,10 +49,24 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
   })();
 
   // ── Handlers ──────────────────────────────────────────────────────────────
-  const handleDownload = (job) => {
+  const handleDownload = async (job) => {
     const file = job.outputFiles?.find(f => f.format === 'docx');
-    const url = file?.url || `/api/translate/download/${job.id}`;
-    window.open(url, '_blank');
+    // Cloud URL — open directly (public, no auth needed)
+    if (file?.url) { window.open(file.url, '_blank'); return; }
+    // Local download — needs auth token
+    try {
+      const res = await authFetch(`/api/translate/download/${job.id}`);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = file?.name || `${job.originalName.replace('.docx', '')}_hindi.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch { alert('Download failed. The file may have expired — please re-translate.'); }
   };
 
   const handleDelete = async (jobId) => {

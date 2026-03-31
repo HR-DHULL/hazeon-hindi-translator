@@ -28,10 +28,22 @@ function BatchProgress({ jobs, onNewTranslation, onViewDashboard }) {
     setCancellingId(null);
   };
 
-  const handleDownload = (job) => {
+  const handleDownload = async (job) => {
     const file = job.outputFiles?.find(f => f.format === 'docx');
-    const url = file?.url || `/api/translate/download/${job.id}`;
-    window.open(url, '_blank');
+    if (file?.url) { window.open(file.url, '_blank'); return; }
+    try {
+      const res = await authFetch(`/api/translate/download/${job.id}`);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = file?.name || `${job.originalName.replace('.docx', '')}_hindi.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch { alert('Download failed. The file may have expired — please re-translate.'); }
   };
 
   const statusIcon = (job) => {
