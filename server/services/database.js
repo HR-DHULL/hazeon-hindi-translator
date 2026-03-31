@@ -176,6 +176,48 @@ export async function createSignedUploadUrl(jobId, filename) {
   return { signedUrl: data.signedUrl, storagePath };
 }
 
+// ─── Custom Glossary ─────────────────────────────────────────────────────────
+
+export async function dbGetGlossary(userId) {
+  const { data, error } = await supabase
+    .from('custom_glossary')
+    .select('id, english_term, hindi_term')
+    .eq('user_id', userId)
+    .order('english_term');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function dbAddGlossaryTerms(userId, terms) {
+  // terms: [{ english_term, hindi_term }]
+  const rows = terms.map(t => ({
+    user_id: userId,
+    english_term: t.english_term.trim(),
+    hindi_term: t.hindi_term.trim(),
+  }));
+  const { error } = await supabase
+    .from('custom_glossary')
+    .upsert(rows, { onConflict: 'user_id,english_term' });
+  if (error) throw error;
+}
+
+export async function dbDeleteGlossaryTerm(userId, termId) {
+  const { error } = await supabase
+    .from('custom_glossary')
+    .delete()
+    .eq('id', termId)
+    .eq('user_id', userId);
+  if (error) throw error;
+}
+
+export async function dbClearGlossary(userId) {
+  const { error } = await supabase
+    .from('custom_glossary')
+    .delete()
+    .eq('user_id', userId);
+  if (error) throw error;
+}
+
 // ─── Row ↔ Job mappers ───────────────────────────────────────────────────────
 
 function jobToRow(job) {
@@ -207,6 +249,7 @@ function updatesToRow(updates) {
   if (updates.totalChunks !== undefined)  row.total_chunks = updates.totalChunks;
   if (updates.outputFiles !== undefined)  row.output_files = updates.outputFiles;
   if (updates.completedAt !== undefined)  row.completed_at = updates.completedAt;
+  if (updates.qualityScore !== undefined) row.quality_score = updates.qualityScore;
   return row;
 }
 
@@ -224,6 +267,7 @@ function rowToJob(row) {
     currentChunk: row.current_chunk,
     totalChunks: row.total_chunks,
     outputFiles: row.output_files || [],
+    qualityScore: row.quality_score ?? null,
     createdAt: row.created_at,
     completedAt: row.completed_at,
   };

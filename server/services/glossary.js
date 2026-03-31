@@ -1109,6 +1109,10 @@ export function applyHindiCorrections(hindiText) {
   if (!hindiText) return hindiText;
   let result = hindiText;
 
+  // Fix: garbled math/set symbols that shouldn't appear in Hindi exam text
+  // These come from original DOCX special characters that survived translation
+  result = result.replace(/\s*[∩∪∈∉⊂⊃⊆⊇∧∨⊕⊗⊙]\s*/g, ' – ');
+
   // Fix: "थाली" in cell biology context → "पट्टिका"
   // "भूमध्यरेखीय थाली" → "भूमध्यरेखीय पट्टिका" (equatorial/metaphase plate)
   result = result.replace(/भूमध्यरेखीय\s+थाली/g, 'भूमध्यरेखीय पट्टिका');
@@ -2262,6 +2266,32 @@ export function parseCustomAbbreviations(bookContext = '') {
     abbrs.push(match[1]);
   }
   return abbrs;
+}
+
+/**
+ * Apply user's custom glossary overrides to translated text.
+ * Custom terms have highest priority — they override both Gemini output and built-in glossary.
+ * @param {string} translatedText - Hindi text
+ * @param {string} originalText - English source
+ * @param {Array<{english_term: string, hindi_term: string}>} customTerms
+ */
+export function applyCustomGlossary(translatedText, originalText, customTerms) {
+  if (!translatedText || !originalText || !customTerms?.length) return translatedText;
+
+  let result = translatedText;
+  const upperOriginal = originalText.toUpperCase();
+
+  // Sort by English term length (longest first) to avoid partial matches
+  const sorted = [...customTerms].sort((a, b) => b.english_term.length - a.english_term.length);
+
+  for (const { english_term, hindi_term } of sorted) {
+    if (!upperOriginal.includes(english_term.toUpperCase())) continue;
+    // Replace any remaining English occurrences in the translated text
+    const termRegex = new RegExp(`\\b${escapeRegex(english_term)}\\b`, 'gi');
+    result = result.replace(termRegex, hindi_term);
+  }
+
+  return result;
 }
 
 function escapeRegex(str) {

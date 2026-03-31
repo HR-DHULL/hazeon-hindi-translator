@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, File, AlertCircle, Languages, BookOpen, Info, X } from 'lucide-react';
+import { Upload, File, AlertCircle, Languages, BookOpen, Info, X, Plus } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const POPULAR_BOOKS = [
@@ -20,23 +20,20 @@ const POPULAR_BOOKS = [
 function FileUpload({ onUploadComplete }) {
   const { authFetch } = useAuth();
   const [dragActive, setDragActive] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [pdfWarning, setPdfWarning] = useState(false);
-  const [pageWarning, setPageWarning] = useState(null);
   const [bookContext, setBookContext] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef(null);
 
-  // Estimate page count from file size.
-  // Typical UPSC MCQ DOCX: ~25–40 KB per page of dense question content.
   const estimatePages = (bytes) => Math.round(bytes / 30000);
 
   const getPageWarning = (file) => {
     const est = estimatePages(file.size);
-    if (est > 80) return { level: 'error', est, msg: `This file is ~${est} pages — very likely to timeout or produce errors. Split into files of 30 pages or fewer for best results.` };
-    if (est > 30) return { level: 'warn', est, msg: `This file is ~${est} pages. Accuracy is best under 30 pages. Consider splitting chapter-wise for reliable results.` };
+    if (est > 80) return { level: 'error', est, msg: `~${est} pages — very likely to timeout. Split into 30-page files.` };
+    if (est > 30) return { level: 'warn', est, msg: `~${est} pages — accuracy is best under 30 pages.` };
     return null;
   };
 
@@ -44,26 +41,32 @@ function FileUpload({ onUploadComplete }) {
     const ext = '.' + file.name.split('.').pop().toLowerCase();
     if (ext === '.pdf' || ext === '.txt') {
       setPdfWarning(true);
-      return `Only DOCX files are supported. PDF and TXT files cannot preserve formatting. Please convert your file to DOCX.`;
+      return `${file.name}: Only DOCX files are supported.`;
     }
-    if (ext !== '.docx') {
-      return `Unsupported file type: ${ext}. Only .docx files are accepted.`;
-    }
-    if (file.size > 100 * 1024 * 1024) {
-      return 'File too large. Maximum size: 100MB';
-    }
-    setPdfWarning(false);
+    if (ext !== '.docx') return `${file.name}: Unsupported file type ${ext}.`;
+    if (file.size > 100 * 1024 * 1024) return `${file.name}: File too large (max 100MB).`;
     return null;
   };
 
-  const handleFile = (file) => {
+  const addFiles = (fileList) => {
     setError('');
     setPdfWarning(false);
-    setPageWarning(null);
-    const err = validateFile(file);
-    if (err) { setError(err); return; }
-    setSelectedFile(file);
-    setPageWarning(getPageWarning(file));
+    const newFiles = [];
+    const errors = [];
+    for (const file of fileList) {
+      // Skip duplicates
+      if (selectedFiles.some(f => f.name === file.name && f.size === file.size)) continue;
+      const err = validateFile(file);
+      if (err) { errors.push(err); continue; }
+      newFiles.push(file);
+    }
+    if (errors.length) setError(errors.join(' '));
+    if (newFiles.length) setSelectedFiles(prev => [...prev, ...newFiles]);
+  };
+
+  const removeFile = (index) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+    setError('');
   };
 
   const handleDrag = (e) => {
@@ -77,51 +80,69 @@ function FileUpload({ onUploadComplete }) {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (e.dataTransfer.files?.[0]) handleFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files?.length) addFiles(Array.from(e.dataTransfer.files));
   };
 
   const handleUpload = async () => {
-    if (!selectedFile) return;
+    if (selectedFiles.length === 0) return;
     setUploading(true);
     setError('');
-    try {
-      // Step 1: Get a signed Supabase upload URL (no file sent to Vercel)
-      const prepRes = await authFetch('/api/translate/prepare', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: selectedFile.name, bookContext: bookContext.trim() }),
-      });
-      if (!prepRes.ok) {
-        const d = await prepRes.json();
-        throw new Error(d.error || 'Failed to prepare upload');
+
+    const startedJobs = [];
+
+    for (const file of selectedFiles) {
+      try {
+        // Step 1: Prepare — get signed URL
+        const prepRes = await authFetch('/api/translate/prepare', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: file.name, bookContext: bookContext.trim() }),
+        });
+        if (!prepRes.ok) {
+          const d = await prepRes.json();
+          // If rate-limited (too many concurrent), mark as queued and continue
+          if (prepRes.status === 429) {
+            startedJobs.push({ id: null, originalName: file.name, status: 'queued', progress: 0, message: 'Queued — waiting for slot', _file: file, _bookContext: bookContext.trim() });
+            continue;
+          }
+          throw new Error(d.error || `Failed to prepare ${file.name}`);
+        }
+        const { jobId, signedUrl, storagePath, originalName } = await prepRes.json();
+
+        // Step 2: Upload to Supabase
+        const uploadRes = await fetch(signedUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+          body: file,
+        });
+        if (!uploadRes.ok) throw new Error(`Upload failed for ${file.name}`);
+
+        // Step 3: Start translation
+        const startRes = await authFetch('/api/translate/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId, storagePath }),
+        });
+        if (!startRes.ok) {
+          const d = await startRes.json();
+          throw new Error(d.error || `Failed to start ${file.name}`);
+        }
+
+        startedJobs.push({ id: jobId, originalName, status: 'processing', progress: 0, message: 'Starting...' });
+      } catch (err) {
+        startedJobs.push({ id: null, originalName: file.name, status: 'failed', progress: 0, message: err.message });
       }
-      const { jobId, signedUrl, storagePath, originalName } = await prepRes.json();
-
-      // Step 2: Upload directly to Supabase (bypasses Vercel size limit)
-      const uploadRes = await fetch(signedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
-        body: selectedFile,
-      });
-      if (!uploadRes.ok) throw new Error('File upload to storage failed. Please try again.');
-
-      // Step 3: Tell the server to start translation
-      const startRes = await authFetch('/api/translate/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId, storagePath }),
-      });
-      if (!startRes.ok) {
-        const d = await startRes.json();
-        throw new Error(d.error || 'Failed to start translation');
-      }
-
-      onUploadComplete({ id: jobId, originalName, status: 'processing', progress: 0, message: 'Starting...' });
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setUploading(false);
     }
+
+    // If any jobs were queued (rate-limited), retry them after a short delay
+    const queuedJobs = startedJobs.filter(j => j.status === 'queued');
+    if (queuedJobs.length > 0) {
+      // We'll let the batch progress view handle retries via polling
+      // For now, mark them as queued in the UI
+    }
+
+    setUploading(false);
+    onUploadComplete(startedJobs);
   };
 
   const formatSize = (bytes) => {
@@ -138,15 +159,18 @@ function FileUpload({ onUploadComplete }) {
     setShowSuggestions(false);
   };
 
+  const totalSize = selectedFiles.reduce((s, f) => s + f.size, 0);
+  const hasLargeFile = selectedFiles.some(f => estimatePages(f.size) > 80);
+
   return (
     <div className="max-w-2xl mx-auto">
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
 
         {/* Header */}
         <div className="px-6 py-5 border-b border-slate-100">
-          <h2 className="text-lg font-bold text-slate-900">Upload Document for Translation</h2>
+          <h2 className="text-lg font-bold text-slate-900">Upload Documents for Translation</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Upload English UPSC/HCS material (DOCX only) — formatting fully preserved in Hindi output
+            Upload one or more English UPSC/HCS DOCX files — formatting fully preserved in Hindi output
           </p>
         </div>
 
@@ -156,7 +180,7 @@ function FileUpload({ onUploadComplete }) {
           <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3">
             <Info size={15} className="text-indigo-500 mt-0.5 shrink-0" />
             <p className="text-xs text-indigo-700">
-              Only <strong>.docx</strong> files are accepted. Fonts, styles, bullets, tables, headers &amp; footers are preserved in output.
+              Only <strong>.docx</strong> files are accepted. You can select multiple files at once. Formatting is preserved in output.
             </p>
           </div>
 
@@ -165,7 +189,7 @@ function FileUpload({ onUploadComplete }) {
             className={`relative rounded-xl border-2 border-dashed cursor-pointer transition-all duration-150 ${
               dragActive
                 ? 'border-indigo-400 bg-indigo-50'
-                : selectedFile
+                : selectedFiles.length > 0
                 ? 'border-green-300 bg-green-50'
                 : 'border-slate-200 bg-slate-50 hover:border-indigo-300 hover:bg-indigo-50/40'
             }`}
@@ -179,24 +203,45 @@ function FileUpload({ onUploadComplete }) {
               ref={inputRef}
               type="file"
               accept=".docx"
-              onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+              multiple
+              onChange={(e) => {
+                if (e.target.files?.length) addFiles(Array.from(e.target.files));
+                e.target.value = ''; // allow re-selecting same files
+              }}
               className="hidden"
             />
 
-            {selectedFile ? (
-              <div className="flex items-center gap-3 px-4 py-4">
-                <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center shrink-0">
-                  <File size={20} className="text-blue-600" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-800 truncate">{selectedFile.name}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{formatSize(selectedFile.size)}</p>
-                </div>
+            {selectedFiles.length > 0 ? (
+              <div className="px-4 py-3 space-y-2" onClick={(e) => e.stopPropagation()}>
+                {selectedFiles.map((file, i) => {
+                  const warn = getPageWarning(file);
+                  return (
+                    <div key={`${file.name}-${i}`} className="flex items-center gap-3 bg-white rounded-lg px-3 py-2 border border-slate-100">
+                      <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
+                        <File size={16} className="text-blue-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-slate-800 truncate">{file.name}</p>
+                        <p className="text-xs text-slate-400">{formatSize(file.size)}
+                          {warn && <span className={warn.level === 'error' ? ' text-red-500' : ' text-amber-500'}> · {warn.msg}</span>}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => removeFile(i)}
+                        className="p-1 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
+                {/* Add more button */}
                 <button
-                  onClick={(e) => { e.stopPropagation(); setSelectedFile(null); setError(''); setPdfWarning(false); setPageWarning(null); }}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+                  onClick={(e) => { e.stopPropagation(); inputRef.current?.click(); }}
+                  className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 py-2 rounded-lg border border-dashed border-indigo-200 transition"
                 >
-                  <X size={16} />
+                  <Plus size={13} />
+                  Add more files
                 </button>
               </div>
             ) : (
@@ -205,9 +250,9 @@ function FileUpload({ onUploadComplete }) {
                   <Upload size={22} className="text-slate-400" />
                 </div>
                 <p className="text-sm font-medium text-slate-700">
-                  Drag &amp; drop your DOCX file, or <span className="text-indigo-600">browse</span>
+                  Drag &amp; drop your DOCX files, or <span className="text-indigo-600">browse</span>
                 </p>
-                <p className="text-xs text-slate-400 mt-1">DOCX only · Best accuracy: under 30 pages · max 100MB</p>
+                <p className="text-xs text-slate-400 mt-1">DOCX only · Select multiple files · Best accuracy: under 30 pages each · max 100MB</p>
               </div>
             )}
           </div>
@@ -219,29 +264,7 @@ function FileUpload({ onUploadComplete }) {
               <div>
                 <p className="text-xs font-semibold text-amber-800">PDF &amp; TXT files are not supported</p>
                 <p className="text-xs text-amber-700 mt-0.5">
-                  PDF files cannot preserve formatting. Convert your PDF to DOCX using Microsoft Word or an online converter, then upload.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Page count warning */}
-          {pageWarning && (
-            <div className={`flex items-start gap-2.5 rounded-xl px-4 py-3 border ${
-              pageWarning.level === 'error'
-                ? 'bg-red-50 border-red-200'
-                : 'bg-amber-50 border-amber-200'
-            }`}>
-              <AlertCircle size={15} className={`mt-0.5 shrink-0 ${pageWarning.level === 'error' ? 'text-red-500' : 'text-amber-500'}`} />
-              <div>
-                <p className={`text-xs font-semibold ${pageWarning.level === 'error' ? 'text-red-800' : 'text-amber-800'}`}>
-                  {pageWarning.level === 'error' ? 'File too large for accurate translation' : 'Large file — accuracy may reduce'}
-                </p>
-                <p className={`text-xs mt-0.5 ${pageWarning.level === 'error' ? 'text-red-700' : 'text-amber-700'}`}>
-                  {pageWarning.msg}
-                </p>
-                <p className={`text-xs mt-1 font-medium ${pageWarning.level === 'error' ? 'text-red-800' : 'text-amber-800'}`}>
-                  Recommended: split into chapter-wise files of 20–30 pages for best accuracy.
+                  Convert your PDF to DOCX using Microsoft Word or an online converter, then upload.
                 </p>
               </div>
             </div>
@@ -261,7 +284,7 @@ function FileUpload({ onUploadComplete }) {
               <BookOpen size={14} className="text-slate-400" />
               <label htmlFor="bookContext" className="text-sm font-medium text-slate-700">
                 Source / Book Context
-                <span className="ml-1.5 text-xs font-normal text-slate-400">(optional)</span>
+                <span className="ml-1.5 text-xs font-normal text-slate-400">(optional — applies to all files)</span>
               </label>
             </div>
             <p className="text-xs text-slate-500">
@@ -303,7 +326,7 @@ function FileUpload({ onUploadComplete }) {
           {/* Submit button */}
           <button
             onClick={handleUpload}
-            disabled={!selectedFile || uploading}
+            disabled={selectedFiles.length === 0 || uploading || hasLargeFile}
             className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-semibold text-sm px-5 py-3 rounded-xl transition-all duration-150 shadow-sm shadow-indigo-200"
           >
             {uploading ? (
@@ -312,15 +335,22 @@ function FileUpload({ onUploadComplete }) {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                Uploading...
+                Uploading {selectedFiles.length} file{selectedFiles.length !== 1 ? 's' : ''}...
               </>
             ) : (
               <>
                 <Languages size={18} />
-                Translate to Hindi (Devanagari)
+                Translate {selectedFiles.length > 1 ? `${selectedFiles.length} Files` : ''} to Hindi
               </>
             )}
           </button>
+
+          {/* File count summary */}
+          {selectedFiles.length > 1 && (
+            <p className="text-xs text-center text-slate-400">
+              {selectedFiles.length} files · {formatSize(totalSize)} total · ~{estimatePages(totalSize)} pages estimated
+            </p>
+          )}
         </div>
 
         {/* Feature strip */}
@@ -328,8 +358,8 @@ function FileUpload({ onUploadComplete }) {
           {[
             { icon: '📄', title: 'Formatting Preserved', desc: 'Fonts, bullets, tables, headers' },
             { icon: '🔤', title: 'Abbreviations Kept', desc: 'SC, IAS, GDP stay in English' },
-            { icon: '📚', title: 'UPSC Glossary', desc: '200+ official Hindi terms' },
-            { icon: '⚡', title: 'Live Progress', desc: 'Real-time translation updates' },
+            { icon: '📚', title: 'UPSC Glossary', desc: '600+ official Hindi terms' },
+            { icon: '📦', title: 'Batch Upload', desc: 'Multiple files at once' },
           ].map((f) => (
             <div key={f.title} className="px-4 py-4 border-r last:border-r-0 border-slate-100">
               <div className="text-xl mb-1">{f.icon}</div>

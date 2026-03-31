@@ -47,14 +47,18 @@ export async function requireAuth(req, res, next) {
 
     const appMeta = user.app_metadata || {};
 
+    // Use profile (source of truth for pages_used) with app_metadata fallback for role/plan.
+    // For page limits: profile is authoritative — if missing, use app_metadata,
+    // but default pagesUsed to pagesLimit (block) instead of 0 (allow-all) to be safe.
+    const fallbackLimit = appMeta.pages_limit ?? 500;
     req.user = {
       id: user.id,
       email: user.email,
       fullName: profile?.full_name || '',
-      role:       profile?.role       ?? appMeta.role       ?? 'user',
-      plan:       profile?.plan       ?? appMeta.plan       ?? 'free',
-      pagesUsed:  profile?.pages_used ?? appMeta.pages_used ?? 0,
-      pagesLimit: profile?.pages_limit ?? appMeta.pages_limit ?? 500,
+      role:       profile?.role        ?? appMeta.role       ?? 'user',
+      plan:       profile?.plan        ?? appMeta.plan       ?? 'free',
+      pagesUsed:  profile?.pages_used  ?? appMeta.pages_used ?? fallbackLimit,
+      pagesLimit: profile?.pages_limit ?? fallbackLimit,
     };
 
     next();

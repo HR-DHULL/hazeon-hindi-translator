@@ -1,41 +1,19 @@
 import fs from 'fs';
 import path from 'path';
-import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
 import JSZip from 'jszip';
-import { extractParagraphTexts } from './docxProcessor.js';
+import { extractParagraphTexts, extractDocumentStats } from './docxProcessor.js';
 
 /**
- * Parse uploaded file and extract text content.
- * Supports PDF, DOCX, and plain text files.
+ * Parse uploaded DOCX file and extract text content.
  */
 export async function parseFile(filePath) {
   const ext = path.extname(filePath).toLowerCase();
 
-  switch (ext) {
-    case '.pdf':
-      return parsePDF(filePath);
-    case '.docx':
-      return parseDOCX(filePath);
-    case '.txt':
-      return parseTXT(filePath);
-    default:
-      throw new Error(`Unsupported file format: ${ext}. Supported: .pdf, .docx, .txt`);
+  if (ext === '.docx') {
+    return parseDOCX(filePath);
   }
-}
-
-async function parsePDF(filePath) {
-  const buffer = fs.readFileSync(filePath);
-  const data = await pdfParse(buffer);
-  return {
-    text: data.text,
-    pageCount: data.numpages,
-    metadata: {
-      title: data.info?.Title || '',
-      author: data.info?.Author || '',
-    },
-    format: 'pdf',
-  };
+  throw new Error(`Unsupported file format: ${ext}. Only .docx files are accepted.`);
 }
 
 async function parseDOCX(filePath) {
@@ -48,29 +26,37 @@ async function parseDOCX(filePath) {
   const zip = await JSZip.loadAsync(buffer);
   const docXmlFile = zip.file('word/document.xml');
   let paragraphTexts = [];
+  let docStats = { tableCount: 0, imageCount: 0, paragraphMeta: [] };
   if (docXmlFile) {
     const docXml = await docXmlFile.async('string');
     paragraphTexts = extractParagraphTexts(docXml);
+    docStats = extractDocumentStats(docXml);
   }
 
-  const paragraphs = result.value.split('\n').filter((p) => p.trim());
+  // Try to read actual page count from DOCX metadata (docProps/app.xml)
+  let pageCount = null;
+  try {
+    const appXmlFile = zip.file('docProps/app.xml');
+    if (appXmlFile) {
+      const appXml = await appXmlFile.async('string');
+      const pagesMatch = appXml.match(/<Pages>(\d+)<\/Pages>/);
+      if (pagesMatch) pageCount = parseInt(pagesMatch[1], 10);
+    }
+  } catch {}
+
+  // Fallback: estimate from character count (~2000 chars per page for UPSC content)
+  if (!pageCount || pageCount < 1) {
+    const totalChars = result.value.length;
+    pageCount = Math.max(1, Math.ceil(totalChars / 2000));
+  }
+
   return {
     text: result.value,
-    pageCount: Math.ceil(paragraphs.length / 30),
+    pageCount,
     metadata: {},
     format: 'docx',
-    paragraphTexts, // Original paragraph texts for clone-and-replace mapping
-  };
-}
-
-async function parseTXT(filePath) {
-  const text = fs.readFileSync(filePath, 'utf-8');
-  const lines = text.split('\n');
-  return {
-    text,
-    pageCount: Math.ceil(lines.length / 50),
-    metadata: {},
-    format: 'txt',
+    paragraphTexts,
+    docStats, // { tableCount, imageCount, paragraphMeta[] }
   };
 }
 

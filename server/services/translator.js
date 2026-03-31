@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { applyGlossaryPostProcessing, applyHindiCorrections, getGlossaryPrompt } from './glossary.js';
 import { applyContextDisambiguation, getDisambiguationPrompt } from './contextDisambiguation.js';
+import { lookupCache, storeCache, getCacheStats } from './translationCache.js';
 
 // ── Google Gemini AI — REQUIRED ──────────────────────────────────────────────
 if (!process.env.GEMINI_API_KEY) {
@@ -96,6 +97,24 @@ function hasUntranslatedEnglish(text, original) {
 
 /** Matches exam source citation tags, e.g. [UPPSC 2015] [UP Lower Sub. 2004] */
 const EXAM_TAG_REGEX = /\[([A-Z][^\]]{1,60}(?:19|20)\d{2}[^\]]*)\]/g;
+
+/**
+ * Detect if a paragraph is a standalone exam source citation line.
+ * These are short lines containing an exam name + year, e.g.:
+ *   "UPPSC 2015", "UP PCS (Pre) 2018", "SSC CGL 2020", "UPSC Prelims 2019"
+ *   "UP Lower Sub. 2004", "UP R.O./A.R.O. (Mains) 2014", "BPSC 67th 2022"
+ * They should NOT be translated — keep as-is in the output.
+ */
+const STANDALONE_EXAM_REGEX = /^\s*\(?(?:UPSC|UPPSC|UP\s?PCS|UP\s?PSC|SSC|BPSC|MPPSC|RPSC|CGPSC|JPSC|HPSC|OPSC|WBPSC|KPSC|TNPSC|APPSC|TSPSC|MPSC|GPSC|UKPSC|HCS|RAS|IAS|NDA|CDS|CAPF|CPO|CGL|CHSL|IFS|IES|ISS|GATE|NET|CTET|DSSSB|KAS|JKPSC|UP\s+Lower\s+Sub|UP\s+R\.?O\.?|UP\s+A\.?R\.?O\.?|UP\s+PCS\s*\(|UP\s+U\.?D\.?A|UP\s+L\.?D\.?A)[^)]*\)?\s*\.?\s*(?:Pre\.?|Prelims?|Mains?|Pre\s*&\s*Mains|\d{1,3}(?:st|nd|rd|th))?\s*\.?\s*(?:\((?:Pre|Mains|Re-exam)\))?\s*,?\s*(?:19|20)\d{2}\s*\)?$/i;
+
+function isStandaloneExamCitation(text) {
+  const trimmed = text.trim();
+  // Must be short (exam citations are typically under 60 chars)
+  if (trimmed.length > 80 || trimmed.length < 4) return false;
+  // Must contain a year
+  if (!/(?:19|20)\d{2}/.test(trimmed)) return false;
+  return STANDALONE_EXAM_REGEX.test(trimmed);
+}
 
 function protectExamTags(text) {
   const tags = [];
@@ -264,22 +283,86 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
  * Translate an array of paragraphs preserving 1-to-1 order.
  * Used for DOCX clone-and-replace.
  * Two-pass: first pass translates all batches, second pass fixes any remaining English.
+ *
+ * Standalone exam citation paragraphs (e.g. "UPPSC 2015") are preserved as-is.
  */
 export async function translateParagraphs(paragraphs, bookContext = '', onProgress) {
-  const translated = await translateParagraphsBatched(paragraphs, onProgress);
-  const verified  = await verifyAndFixTranslations(paragraphs, translated, onProgress);
+  // Identify exam citation paragraphs that should NOT be translated
+  const examCitationIndices = new Set();
+  for (let i = 0; i < paragraphs.length; i++) {
+    if (isStandaloneExamCitation(paragraphs[i])) {
+      examCitationIndices.add(i);
+    }
+  }
+  if (examCitationIndices.size > 0) {
+    console.log(`  Preserving ${examCitationIndices.size} standalone exam citation(s) as-is`);
+  }
+
+  // Build filtered list for translation (replace exam citations with empty strings)
+  const toTranslate = paragraphs.map((p, i) => examCitationIndices.has(i) ? '' : p);
+
+  const translated = await translateParagraphsBatched(toTranslate, onProgress);
+
+  // Restore exam citations in their original positions
+  for (const idx of examCitationIndices) {
+    translated[idx] = paragraphs[idx];
+  }
+
+  const verified  = await verifyAndFixTranslations(paragraphs, translated, onProgress, examCitationIndices);
   return fixMissingMCQLabels(verified);
 }
 
-// ── Gemini paragraph translation (batched, parallel) ─────────────────────────
+// ── Gemini paragraph translation (batched, parallel, with translation memory) ─
 async function translateParagraphsBatched(paragraphs, onProgress) {
   const BATCH_SIZE = 20;
   const CONCURRENCY = 5; // Paid API key — run 5 batches in parallel
 
-  const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
   const translated = new Array(paragraphs.length).fill('');
 
-  // Process in windows of CONCURRENCY batches at a time
+  // ── Translation Memory: check cache for previously translated paragraphs ──
+  // IMPORTANT: cached translations still get post-processed through latest
+  // glossary + Hindi corrections, so rule updates apply retroactively.
+  let cacheHits = 0;
+  try {
+    const cached = await lookupCache(paragraphs);
+    for (const [idx, text] of cached) {
+      let t = applyGlossaryPostProcessing(text, paragraphs[idx]);
+      t = applyHindiCorrections(t);
+      translated[idx] = t;
+      cacheHits++;
+    }
+    if (cacheHits > 0) {
+      const stats = getCacheStats();
+      console.log(`  Translation Memory: ${cacheHits}/${paragraphs.length} paragraphs from cache (${stats.memoryEntries} in memory, DB ${stats.dbAvailable ? 'connected' : 'unavailable'})`);
+    }
+  } catch (e) {
+    console.warn('  Translation Memory lookup failed (non-fatal):', e.message);
+  }
+
+  // Build list of paragraphs that still need translation (cache misses)
+  const needsTranslation = [];
+  for (let i = 0; i < paragraphs.length; i++) {
+    if (!translated[i] && paragraphs[i]?.trim()) {
+      needsTranslation.push(i);
+    }
+  }
+
+  if (needsTranslation.length === 0) {
+    console.log('  All paragraphs served from Translation Memory — skipping Gemini');
+    return translated;
+  }
+
+  if (cacheHits > 0) {
+    console.log(`  Translating ${needsTranslation.length} remaining paragraphs via Gemini (${cacheHits} cached)`);
+  }
+
+  // Re-batch only the uncached paragraphs for Gemini
+  const uncachedTexts = needsTranslation.map(i => paragraphs[i]);
+  const totalBatches = Math.ceil(uncachedTexts.length / BATCH_SIZE);
+
+  // Process uncached paragraphs in windows of CONCURRENCY batches at a time
+  const newTranslations = []; // collect {source, translated} pairs for cache storage
+
   for (let w = 0; w < totalBatches; w += CONCURRENCY) {
     const window = [];
     for (let b = w; b < Math.min(w + CONCURRENCY, totalBatches); b++) {
@@ -287,35 +370,38 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
     }
 
     if (onProgress) {
-      const b = w;
-      const start = b * BATCH_SIZE;
+      const done = w * BATCH_SIZE;
+      const total = uncachedTexts.length;
       await onProgress({
-        chunk: b + 1,
+        chunk: w + 1,
         totalChunks: totalBatches,
-        percent: Math.round((b / totalBatches) * 100),
+        percent: Math.round((done / total) * 100),
         status: 'translating',
-        message: `Translating paragraphs ${start + 1}–${Math.min((w + CONCURRENCY) * BATCH_SIZE, paragraphs.length)} of ${paragraphs.length}...`,
+        message: `Translating paragraphs ${done + 1}–${Math.min(done + CONCURRENCY * BATCH_SIZE, total)} of ${total}${cacheHits ? ` (${cacheHits} from cache)` : ''}...`,
       });
     }
 
     await Promise.all(window.map(async (b) => {
-      const start = b * BATCH_SIZE;
-      const batch = paragraphs.slice(start, start + BATCH_SIZE);
+      const batchStart = b * BATCH_SIZE;
+      const batch = uncachedTexts.slice(batchStart, batchStart + BATCH_SIZE);
+      const batchOriginalIndices = needsTranslation.slice(batchStart, batchStart + BATCH_SIZE);
 
       try {
-        const nonEmptyIndices = [];
+        const nonEmptyLocalIndices = [];
         const nonEmptyTexts = [];
         batch.forEach((p, i) => {
-          if (p.trim()) { nonEmptyIndices.push(i); nonEmptyTexts.push(p); }
+          if (p.trim()) { nonEmptyLocalIndices.push(i); nonEmptyTexts.push(p); }
         });
 
         if (nonEmptyTexts.length > 0) {
           const results = await translateWithGemini(nonEmptyTexts);
-          nonEmptyIndices.forEach((localIdx, ri) => {
+          nonEmptyLocalIndices.forEach((localIdx, ri) => {
             let t = results[ri] || batch[localIdx];
             t = applyGlossaryPostProcessing(t, batch[localIdx]);
             t = applyHindiCorrections(t);
-            translated[start + localIdx] = t;
+            const origIdx = batchOriginalIndices[localIdx];
+            translated[origIdx] = t;
+            newTranslations.push({ source: batch[localIdx], translated: t });
           });
         }
       } catch (err) {
@@ -327,12 +413,14 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
 
         for (let i = 0; i < batch.length; i++) {
           if (!batch[i].trim()) continue;
+          const origIdx = batchOriginalIndices[i];
           try {
             const results = await translateWithGemini([batch[i]]);
             let t = results[0] || batch[i];
             t = applyGlossaryPostProcessing(t, batch[i]);
             t = applyHindiCorrections(t);
-            translated[start + i] = t;
+            translated[origIdx] = t;
+            newTranslations.push({ source: batch[i], translated: t });
           } catch (retryErr) {
             if (/429|quota|rate.?limit/i.test(retryErr.message)) {
               await new Promise(r => setTimeout(r, 5000));
@@ -341,16 +429,23 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
                 let t = results[0] || batch[i];
                 t = applyGlossaryPostProcessing(t, batch[i]);
                 t = applyHindiCorrections(t);
-                translated[start + i] = t;
+                translated[origIdx] = t;
+                newTranslations.push({ source: batch[i], translated: t });
                 continue;
               } catch (_) {}
             }
-            console.warn(`  Individual retry failed for paragraph ${start + i}: ${retryErr.message}`);
-            translated[start + i] = batch[i];
+            console.warn(`  Individual retry failed for paragraph ${origIdx}: ${retryErr.message}`);
+            translated[origIdx] = batch[i];
           }
         }
       }
     }));
+  }
+
+  // Store new translations in cache (background — non-blocking)
+  if (newTranslations.length > 0) {
+    storeCache(newTranslations).catch(() => {});
+    console.log(`  Translation Memory: stored ${newTranslations.length} new translations`);
   }
 
   return translated;
@@ -388,10 +483,12 @@ async function forceTranslateSingle(text) {
  * Second pass: find any translated paragraphs that still contain English and re-translate them.
  * This catches paragraphs that survived the first pass + retries unchanged.
  */
-async function verifyAndFixTranslations(originals, translated, onProgress) {
+async function verifyAndFixTranslations(originals, translated, onProgress, skipIndices = new Set()) {
   // Find paragraphs that still have untranslated English content
+  // Skip exam citation paragraphs — they are intentionally kept in English
   const problematic = [];
   for (let i = 0; i < translated.length; i++) {
+    if (skipIndices.has(i)) continue;
     if (originals[i]?.trim() && translated[i] && hasUntranslatedEnglish(translated[i], originals[i])) {
       problematic.push(i);
     }

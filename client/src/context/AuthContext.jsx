@@ -131,11 +131,26 @@ export function AuthProvider({ children }) {
 
   const logout = () => { clearAuth(); };
 
+  // Refresh user data (pagesUsed, pagesLimit, etc.) from the server
+  const refreshUser = useCallback(async () => {
+    try {
+      const res = await authFetch('/api/auth/me');
+      if (res.ok) {
+        const freshData = await res.json();
+        const updated = { ...user, ...freshData };
+        setUser(updated);
+        localStorage.setItem(USER_KEY, JSON.stringify(updated));
+      }
+    } catch {
+      // Non-fatal — keep existing user data
+    }
+  }, [authFetch, user]);
+
   const isAdmin    = user?.role === 'admin';
   const isLoggedIn = !!token && !!user;
 
   return (
-    <AuthContext.Provider value={{ token, user, loading, isLoggedIn, isAdmin, login, logout, authFetch }}>
+    <AuthContext.Provider value={{ token, user, loading, isLoggedIn, isAdmin, login, logout, authFetch, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

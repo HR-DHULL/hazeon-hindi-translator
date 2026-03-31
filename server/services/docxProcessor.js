@@ -163,13 +163,83 @@ export function extractParagraphTexts(xml) {
       textParts.push(text);
       return _;
     });
-    const fullText = unescapeXml(textParts.join('').trim());
+    const fullText = normalizeSpecialChars(unescapeXml(textParts.join('').trim()));
     if (fullText) {
       paragraphs.push(fullText);
     }
     return pBlock;
   });
   return paragraphs;
+}
+
+/**
+ * Extract document structure stats from DOCX XML.
+ * Counts tables, images, and maps paragraph indices to context (table/body).
+ */
+export function extractDocumentStats(xml) {
+  let tableCount = 0;
+  let imageCount = 0;
+  const paragraphMeta = []; // parallel to extractParagraphTexts output
+
+  // Count tables
+  const tableMatches = xml.match(/<w:tbl[\s>]/g);
+  tableCount = tableMatches ? tableMatches.length : 0;
+
+  // Count images (drawings + VML pictures)
+  const drawingMatches = xml.match(/<w:drawing[\s>]/g);
+  const pictMatches = xml.match(/<w:pict[\s>]/g);
+  imageCount = (drawingMatches ? drawingMatches.length : 0) + (pictMatches ? pictMatches.length : 0);
+
+  // Track which paragraphs are inside tables and which have images
+  // Build a simple context map by scanning the XML linearly
+  let inTable = false;
+  let paraIdx = 0;
+
+  // Split XML by significant tags to track context
+  const tokens = xml.split(/(<\/?w:tbl[\s>][^>]*>|<w:p[\s>][\s\S]*?<\/w:p>)/g);
+  for (const token of tokens) {
+    if (/<w:tbl[\s>]/.test(token)) {
+      inTable = true;
+    } else if (/<\/w:tbl>/.test(token)) {
+      inTable = false;
+    } else if (/<w:p[\s>]/.test(token)) {
+      // Check if this paragraph has text
+      const textParts = [];
+      token.replace(/<w:t[^>]*>([^<]*)<\/w:t>/g, (_, text) => { textParts.push(text); return _; });
+      const fullText = textParts.join('').trim();
+
+      if (fullText) {
+        const hasImage = /<w:drawing[\s>]/.test(token) || /<w:pict[\s>]/.test(token);
+        paragraphMeta.push({
+          index: paraIdx,
+          inTable,
+          hasImage,
+        });
+        paraIdx++;
+      }
+    }
+  }
+
+  return { tableCount, imageCount, paragraphMeta };
+}
+
+/**
+ * Normalize special Unicode characters that cause garbled translations.
+ * Replaces math symbols, unusual separators, and other characters that
+ * confuse the translation engine or produce corrupt Hindi output.
+ */
+function normalizeSpecialChars(str) {
+  return str
+    // Math/set symbols used as separators → space-dash-space
+    .replace(/\s*[∩∪∈∉⊂⊃⊆⊇∧∨⊕⊗⊙]\s*/g, ' – ')
+    // Bullet-like symbols → proper bullet or dash
+    .replace(/\s*[▪▫◆◇○●◎■□▲△▼▽►◄★☆✦✧]\s*/g, ' • ')
+    // Various dashes/hyphens → standard en-dash with spaces
+    .replace(/\s*[‒―⁃⎯⸺⸻]\s*/g, ' – ')
+    // Remove zero-width space and BOM (but keep ZWNJ U+200C and ZWJ U+200D — needed for Devanagari)
+    .replace(/[\u200B\uFEFF]/g, '')
+    // Multiple consecutive spaces → single space
+    .replace(/  +/g, ' ');
 }
 
 function escapeXml(str) {

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS public.jobs (
   current_chunk INTEGER,
   total_chunks INTEGER,
   output_files JSONB DEFAULT '[]'::jsonb,
+  quality_score INTEGER,
   created_at TIMESTAMPTZ DEFAULT now(),
   completed_at TIMESTAMPTZ
 );
@@ -128,3 +129,42 @@ CREATE POLICY "Service role full access to inputs"
   ON storage.objects FOR ALL
   USING (bucket_id = 'inputs')
   WITH CHECK (bucket_id = 'inputs');
+
+-- 7. Custom Glossary — user-defined English→Hindi term overrides
+CREATE TABLE IF NOT EXISTS public.custom_glossary (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  english_term TEXT NOT NULL,
+  hindi_term TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(user_id, english_term)
+);
+
+CREATE INDEX IF NOT EXISTS idx_custom_glossary_user ON public.custom_glossary(user_id);
+
+ALTER TABLE public.custom_glossary ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role full access on custom_glossary"
+  ON public.custom_glossary FOR ALL
+  USING (true)
+  WITH CHECK (true);
+
+-- 8. Translation Memory — caches English→Hindi paragraph translations
+--    Saves Gemini API calls for repeated UPSC content across documents.
+CREATE TABLE IF NOT EXISTS public.translation_cache (
+  source_hash TEXT PRIMARY KEY,            -- MD5 of trimmed source text
+  source_text TEXT NOT NULL,               -- first 2000 chars of English source
+  translated_text TEXT NOT NULL,           -- Hindi translation
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Index for cleanup queries (delete old entries if table grows too large)
+CREATE INDEX IF NOT EXISTS idx_translation_cache_created
+  ON public.translation_cache(created_at);
+
+ALTER TABLE public.translation_cache ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role full access on translation_cache"
+  ON public.translation_cache FOR ALL
+  USING (true)
+  WITH CHECK (true);

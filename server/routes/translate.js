@@ -18,19 +18,27 @@ import {
   dbCountActiveJobs,
   uploadInputFile,
   createSignedUploadUrl,
+  dbGetGlossary,
+  dbAddGlossaryTerms,
+  dbDeleteGlossaryTerm,
+  dbClearGlossary,
 } from '../services/database.js';
 import { processTranslation } from '../services/translationPipeline.js';
 import { requireAuth } from '../middleware/auth.js';
+import { requireAdmin } from '../middleware/auth.js';
 import { sendTranslationEmail } from '../services/email.js';
+import { clearCache, getCacheStats } from '../services/translationCache.js';
 
 
 const router = express.Router();
-const MAX_CONCURRENT_JOBS = 2;
+// 3 jobs translate simultaneously (paid Gemini API — high RPM).
+// Render free tier has ~512MB RAM, so 3 is safe. Extra files queue in the frontend.
+const MAX_CONCURRENT_JOBS = 3;
 
-// Rate limit uploads: max 10 per 10 minutes per IP
+// Rate limit uploads: max 15 per 10 minutes per IP (batch upload support)
 const uploadLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 10,
+  max: 15,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many uploads. Please wait before uploading again.' },
@@ -399,6 +407,75 @@ router.post('/share/:jobId', requireAuth, async (req, res) => {
       return res.status(503).json({ error: 'Email service not configured. Ask admin to set SMTP credentials.' });
     }
     res.status(500).json({ error: 'Failed to send email. Please try again.' });
+  }
+});
+
+// ─── Admin: clear translation cache ─────────────────────────────────────────
+// Use after updating glossary/correction rules to ensure fresh translations.
+router.post('/cache/clear', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const result = await clearCache();
+    res.json({ message: 'Translation cache cleared', ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Admin: cache stats ─────────────────────────────────────────────────────
+router.get('/cache/stats', requireAuth, requireAdmin, async (req, res) => {
+  res.json(getCacheStats());
+});
+
+// ─── Custom Glossary CRUD ────────────────────────────────────────────────────
+
+router.get('/glossary', requireAuth, async (req, res) => {
+  try {
+    const terms = await dbGetGlossary(req.user.id);
+    res.json(terms);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/glossary', requireAuth, async (req, res) => {
+  const { terms } = req.body; // [{ english_term, hindi_term }]
+  if (!Array.isArray(terms) || terms.length === 0) {
+    return res.status(400).json({ error: 'terms array is required' });
+  }
+  // Validate and limit
+  const valid = terms
+    .filter(t => t.english_term?.trim() && t.hindi_term?.trim())
+    .slice(0, 200) // max 200 terms per request
+    .map(t => ({
+      english_term: t.english_term.trim().slice(0, 200),
+      hindi_term: t.hindi_term.trim().slice(0, 500),
+    }));
+  if (valid.length === 0) {
+    return res.status(400).json({ error: 'No valid terms provided' });
+  }
+  try {
+    await dbAddGlossaryTerms(req.user.id, valid);
+    res.json({ message: `${valid.length} term(s) saved` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/glossary/:id', requireAuth, async (req, res) => {
+  try {
+    await dbDeleteGlossaryTerm(req.user.id, req.params.id);
+    res.json({ message: 'Term deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/glossary', requireAuth, async (req, res) => {
+  try {
+    await dbClearGlossary(req.user.id);
+    res.json({ message: 'All custom terms deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
