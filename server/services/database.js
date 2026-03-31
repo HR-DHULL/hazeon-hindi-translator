@@ -75,6 +75,7 @@ const OUTPUT_BUCKET = 'outputs';
 export async function uploadOutputFile(jobId, filename, filePath) {
   const fs = await import('fs');
   const { stat } = await import('fs/promises');
+  const https = await import('https');
 
   const storagePath = `${jobId}/${filename}`;
   const contentType = filename.endsWith('.json')
@@ -83,37 +84,55 @@ export async function uploadOutputFile(jobId, filename, filePath) {
 
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-  const url = `${supabaseUrl}/storage/v1/object/${OUTPUT_BUCKET}/${storagePath}`;
 
-  // Use streaming upload to avoid loading entire file into memory (OOM on 512MB Render)
   const fileSize = (await stat(filePath)).size;
-  const stream = fs.createReadStream(filePath);
+  const uploadUrl = new URL(`${supabaseUrl}/storage/v1/object/${OUTPUT_BUCKET}/${storagePath}`);
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000); // 2 min timeout
+  // Use native https.request with streaming — most reliable for large file uploads
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      req.destroy(new Error('Upload timed out after 3 minutes'));
+    }, 180_000);
 
-  try {
-    const res = await fetch(url, {
+    const req = https.request({
+      hostname: uploadUrl.hostname,
+      port: 443,
+      path: uploadUrl.pathname,
       method: 'POST',
       headers: {
         'apikey': supabaseKey,
         'Authorization': `Bearer ${supabaseKey}`,
         'Content-Type': contentType,
-        'Content-Length': String(fileSize),
+        'Content-Length': fileSize,
         'x-upsert': 'true',
       },
-      body: stream,
-      signal: controller.signal,
-      duplex: 'half',
+    }, (res) => {
+      clearTimeout(timeout);
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve();
+        } else {
+          reject(new Error(`Storage upload failed (${res.statusCode}): ${body}`));
+        }
+      });
     });
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      throw new Error(`Storage upload failed (${res.status}): ${errBody}`);
-    }
-  } finally {
-    clearTimeout(timeout);
-    stream.destroy();
-  }
+
+    req.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+
+    // Stream the file to the request
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(req);
+    fileStream.on('error', (err) => {
+      clearTimeout(timeout);
+      req.destroy(err);
+      reject(err);
+    });
+  });
 
   const publicUrl = `${supabaseUrl}/storage/v1/object/public/${OUTPUT_BUCKET}/${storagePath}`;
   return publicUrl;
