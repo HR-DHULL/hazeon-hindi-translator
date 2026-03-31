@@ -18,7 +18,13 @@ import { applyCustomGlossary } from './glossary.js';
 
 export async function processTranslation(jobId, filePath, baseName, bookContext, userId, userRole, outputDir) {
   const emit = async (updates) => {
-    try { await dbUpdateJob(jobId, updates); } catch (e) {
+    try {
+      // 10s timeout on DB updates to prevent hanging
+      await Promise.race([
+        dbUpdateJob(jobId, updates),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('DB update timed out')), 10_000)),
+      ]);
+    } catch (e) {
       console.warn('DB update failed (non-fatal):', e.message);
     }
   };
@@ -150,17 +156,27 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
       console.warn('Quality scoring failed (non-fatal):', scoreErr.message);
     }
 
-    // Step 5: Mark complete
+    // Step 5: Mark complete (retry up to 3 times — this update is critical)
     const outputFiles = [{ format: 'docx', name: docxFilename, path: docxPath }];
-
-    await emit({
+    const completionData = {
       status: 'completed',
       progress: 100,
       message: 'Translation completed successfully!',
       outputFiles,
       qualityScore,
       completedAt: new Date().toISOString(),
-    });
+    };
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await dbUpdateJob(jobId, completionData);
+        console.log(`  Job ${jobId} marked complete`);
+        break;
+      } catch (e) {
+        console.warn(`  Completion DB update attempt ${attempt + 1} failed:`, e.message);
+        if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
+      }
+    }
 
     // Pages already reserved atomically via dbReservePages above — no separate increment needed
 

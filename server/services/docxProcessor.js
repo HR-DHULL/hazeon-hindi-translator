@@ -11,8 +11,8 @@ import JSZip from 'jszip';
  * @param {string} outputPath - Where to save the cloned DOCX
  */
 export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, outputPath) {
-  const inputBuffer = fs.readFileSync(inputPath);
-  const zip = await JSZip.loadAsync(inputBuffer);
+  // Read input and load zip
+  let zip = await JSZip.loadAsync(fs.readFileSync(inputPath));
 
   // Process main document body
   const docXmlFile = zip.file('word/document.xml');
@@ -22,17 +22,17 @@ export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, out
     zip.file('word/document.xml', modifiedXml);
   }
 
-  // Headers and footers are preserved as-is from the original DOCX.
-  // Watermarks, logos, page numbers all remain unchanged.
-
-  // Stream output to file to reduce memory usage (avoids holding full buffer in memory)
-  await new Promise((resolve, reject) => {
-    const writeStream = fs.createWriteStream(outputPath);
-    zip.generateNodeStream({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 }, streamFiles: true })
-      .pipe(writeStream)
-      .on('finish', resolve)
-      .on('error', reject);
+  // Generate output with minimal compression (faster, less memory)
+  const outputBuffer = await zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 1 },
   });
+
+  // Write and immediately free the buffer
+  fs.writeFileSync(outputPath, outputBuffer);
+  zip = null; // allow GC
+
   return outputPath;
 }
 
