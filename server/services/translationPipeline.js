@@ -13,7 +13,8 @@ import {
   dbReservePages,
   dbGetGlossary,
 } from './database.js';
-import { scoreDocument } from './qualityScore.js';
+// Quality scoring disabled — adds memory pressure on 512MB Render, causing OOM
+// import { scoreDocument } from './qualityScore.js';
 import { applyCustomGlossary } from './glossary.js';
 
 export async function processTranslation(jobId, filePath, baseName, bookContext, userId, userRole, outputDir) {
@@ -133,43 +134,22 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     const docxPath = path.join(outputDir, docxFilename);
     await cloneAndTranslateDOCX(filePath, translatedParagraphs, docxPath);
 
-    await emit({ progress: 92, message: 'Finalizing...' });
-
-    // Step 4: Cloud upload is handled client-side (browser → Supabase directly)
-    // Server just saves the local path — client will relay to cloud after download.
-    console.log(`  Output DOCX: ${(fs.statSync(docxPath).size / 1024 / 1024).toFixed(1)}MB — client will upload to cloud`);
-
-    // Step 4b: Compute quality scores
-    let qualityScore = null;
-    try {
-      const pairs = [];
-      for (let i = 0; i < paragraphs.length; i++) {
-        if (paragraphs[i]?.trim()) {
-          pairs.push({ en: paragraphs[i], hi: translatedParagraphs[i] || '' });
-        }
-      }
-
-      const quality = scoreDocument(pairs);
-      qualityScore = quality.overall;
-      console.log(`  Quality score: ${quality.overall}/100 (${quality.summary.perfect} perfect, ${quality.summary.good} good, ${quality.summary.needsReview} need review)`);
-    } catch (scoreErr) {
-      console.warn('Quality scoring failed (non-fatal):', scoreErr.message);
-    }
-
-    // Step 5: Mark complete (retry up to 3 times — this update is critical)
+    // Step 4: Mark complete IMMEDIATELY — no extra steps that could OOM/hang
+    // Do this FIRST before any other work — if the server OOMs during quality
+    // scoring or other non-essential steps, at least the job is marked complete.
     const outputFiles = [{ format: 'docx', name: docxFilename, path: docxPath }];
-    const completionData = {
-      status: 'completed',
-      progress: 100,
-      message: 'Translation completed successfully!',
-      outputFiles,
-      qualityScore,
-      completedAt: new Date().toISOString(),
-    };
+
+    console.log(`  DOCX generated. Marking job complete...`);
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await dbUpdateJob(jobId, completionData);
+        await dbUpdateJob(jobId, {
+          status: 'completed',
+          progress: 100,
+          message: 'Translation completed successfully!',
+          outputFiles,
+          completedAt: new Date().toISOString(),
+        });
         console.log(`  Job ${jobId} marked complete`);
         break;
       } catch (e) {

@@ -11,27 +11,32 @@ import JSZip from 'jszip';
  * @param {string} outputPath - Where to save the cloned DOCX
  */
 export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, outputPath) {
-  // Read input and load zip
-  let zip = await JSZip.loadAsync(fs.readFileSync(inputPath));
+  // Copy the original DOCX file first, then replace only document.xml
+  // This avoids loading + re-compressing ALL entries (images, fonts, etc.)
+  // which causes OOM on Render's 512MB limit for large DOCX files.
+  fs.copyFileSync(inputPath, outputPath);
 
-  // Process main document body
+  // Read only document.xml from the copy, modify it, and put it back
+  const buffer = fs.readFileSync(outputPath);
+  const zip = await JSZip.loadAsync(buffer);
+
   const docXmlFile = zip.file('word/document.xml');
   if (docXmlFile) {
     const docXml = await docXmlFile.async('string');
     const modifiedXml = replaceParagraphTexts(docXml, translatedParagraphs);
-    zip.file('word/document.xml', modifiedXml);
+
+    // Replace only document.xml — all other entries (images, fonts, styles)
+    // remain as original compressed bytes, never decompressed into memory
+    zip.file('word/document.xml', modifiedXml, { compression: 'DEFLATE' });
   }
 
-  // Generate output with minimal compression (faster, less memory)
+  // Generate output — JSZip re-uses original compressed data for untouched files
   const outputBuffer = await zip.generateAsync({
     type: 'nodebuffer',
     compression: 'DEFLATE',
     compressionOptions: { level: 1 },
   });
-
-  // Write and immediately free the buffer
   fs.writeFileSync(outputPath, outputBuffer);
-  zip = null; // allow GC
 
   return outputPath;
 }
