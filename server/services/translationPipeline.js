@@ -128,6 +128,9 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     const docxPath = path.join(outputDir, docxFilename);
     await cloneAndTranslateDOCX(filePath, translatedParagraphs, docxPath);
 
+    // Force garbage collection of translation buffers before upload
+    if (global.gc) global.gc();
+
     await emit({ progress: 90, message: 'Uploading translated file to cloud...' });
 
     // Step 4: Upload to Supabase Storage via direct REST API (SDK hangs on large files)

@@ -25,13 +25,14 @@ export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, out
   // Headers and footers are preserved as-is from the original DOCX.
   // Watermarks, logos, page numbers all remain unchanged.
 
-  // Generate output
-  const outputBuffer = await zip.generateAsync({
-    type: 'nodebuffer',
-    compression: 'DEFLATE',
-    compressionOptions: { level: 6 },
+  // Stream output to file to reduce memory usage (avoids holding full buffer in memory)
+  await new Promise((resolve, reject) => {
+    const writeStream = fs.createWriteStream(outputPath);
+    zip.generateNodeStream({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 }, streamFiles: true })
+      .pipe(writeStream)
+      .on('finish', resolve)
+      .on('error', reject);
   });
-  fs.writeFileSync(outputPath, outputBuffer);
   return outputPath;
 }
 

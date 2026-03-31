@@ -74,17 +74,20 @@ const OUTPUT_BUCKET = 'outputs';
 
 export async function uploadOutputFile(jobId, filename, filePath) {
   const fs = await import('fs');
-  const fileBuffer = fs.readFileSync(filePath);
+  const { stat } = await import('fs/promises');
 
   const storagePath = `${jobId}/${filename}`;
   const contentType = filename.endsWith('.json')
     ? 'application/json'
     : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-  // Use direct REST API instead of Supabase SDK — SDK hangs on large files
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
   const url = `${supabaseUrl}/storage/v1/object/${OUTPUT_BUCKET}/${storagePath}`;
+
+  // Use streaming upload to avoid loading entire file into memory (OOM on 512MB Render)
+  const fileSize = (await stat(filePath)).size;
+  const stream = fs.createReadStream(filePath);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000); // 2 min timeout
@@ -96,10 +99,12 @@ export async function uploadOutputFile(jobId, filename, filePath) {
         'apikey': supabaseKey,
         'Authorization': `Bearer ${supabaseKey}`,
         'Content-Type': contentType,
+        'Content-Length': String(fileSize),
         'x-upsert': 'true',
       },
-      body: fileBuffer,
+      body: stream,
       signal: controller.signal,
+      duplex: 'half',
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
@@ -107,9 +112,9 @@ export async function uploadOutputFile(jobId, filename, filePath) {
     }
   } finally {
     clearTimeout(timeout);
+    stream.destroy();
   }
 
-  // Build public URL
   const publicUrl = `${supabaseUrl}/storage/v1/object/public/${OUTPUT_BUCKET}/${storagePath}`;
   return publicUrl;
 }
