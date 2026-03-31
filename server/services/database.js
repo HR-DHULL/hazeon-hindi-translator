@@ -77,12 +77,21 @@ export async function uploadOutputFile(jobId, filename, filePath) {
   const fileBuffer = fs.readFileSync(filePath);
 
   const storagePath = `${jobId}/${filename}`;
-  const { error } = await supabase.storage
+
+  // 60-second timeout to prevent hanging on large file uploads
+  const uploadPromise = supabase.storage
     .from(OUTPUT_BUCKET)
     .upload(storagePath, fileBuffer, {
-      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      contentType: filename.endsWith('.json')
+        ? 'application/json'
+        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       upsert: true,
     });
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Storage upload timed out after 60s')), 60000)
+  );
+
+  const { error } = await Promise.race([uploadPromise, timeoutPromise]);
   if (error) throw error;
 
   const { data } = supabase.storage.from(OUTPUT_BUCKET).getPublicUrl(storagePath);

@@ -128,14 +128,14 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     const docxPath = path.join(outputDir, docxFilename);
     await cloneAndTranslateDOCX(filePath, translatedParagraphs, docxPath);
 
-    await emit({ progress: 90, message: 'Uploading translated file...' });
+    await emit({ progress: 90, message: 'Saving translated file...' });
 
-    // Step 4: Upload to Supabase Storage
+    // Step 4: Upload to Supabase Storage (with timeout — falls back to local download)
     let docxUrl = null;
     try {
       docxUrl = await uploadOutputFile(jobId, docxFilename, docxPath);
     } catch (uploadErr) {
-      console.warn('Supabase Storage upload failed, keeping local file:', uploadErr.message);
+      console.warn('Supabase Storage upload failed/timed out, using local file:', uploadErr.message);
     }
 
     // Step 4b: Save preview data with quality scores
