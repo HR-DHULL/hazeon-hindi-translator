@@ -28,10 +28,28 @@ function FileUpload({ onUploadComplete }) {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef(null);
 
-  const estimatePages = (bytes) => Math.round(bytes / 30000);
+  // Page estimates per file — read from DOCX metadata when available
+  const [pageEstimates, setPageEstimates] = useState({});
+
+  // Read actual page count from DOCX metadata (docProps/app.xml) client-side
+  const readDocxPageCount = async (file) => {
+    try {
+      const { default: JSZip } = await import('jszip');
+      const zip = await JSZip.loadAsync(file);
+      const appXml = zip.file('docProps/app.xml');
+      if (appXml) {
+        const xml = await appXml.async('string');
+        const match = xml.match(/<Pages>(\d+)<\/Pages>/);
+        if (match) return parseInt(match[1], 10);
+      }
+    } catch {}
+    // Fallback: conservative estimate (images inflate file size heavily)
+    // Use ~500KB per page as a rough average for image-heavy UPSC docs
+    return Math.max(1, Math.round(file.size / 500000));
+  };
 
   const getPageWarning = (file) => {
-    const est = estimatePages(file.size);
+    const est = pageEstimates[file.name + file.size] || Math.max(1, Math.round(file.size / 500000));
     if (est > 80) return { level: 'error', est, msg: `~${est} pages — very likely to timeout. Split into 30-page files.` };
     if (est > 30) return { level: 'warn', est, msg: `~${est} pages — accuracy is best under 30 pages.` };
     return null;
@@ -61,7 +79,15 @@ function FileUpload({ onUploadComplete }) {
       newFiles.push(file);
     }
     if (errors.length) setError(errors.join(' '));
-    if (newFiles.length) setSelectedFiles(prev => [...prev, ...newFiles]);
+    if (newFiles.length) {
+      setSelectedFiles(prev => [...prev, ...newFiles]);
+      // Read actual page counts from DOCX metadata in background
+      for (const file of newFiles) {
+        readDocxPageCount(file).then(count => {
+          setPageEstimates(prev => ({ ...prev, [file.name + file.size]: count }));
+        });
+      }
+    }
   };
 
   const removeFile = (index) => {
@@ -160,7 +186,8 @@ function FileUpload({ onUploadComplete }) {
   };
 
   const totalSize = selectedFiles.reduce((s, f) => s + f.size, 0);
-  const hasLargeFile = selectedFiles.some(f => estimatePages(f.size) > 80);
+  const totalPages = selectedFiles.reduce((s, f) => s + (pageEstimates[f.name + f.size] || Math.max(1, Math.round(f.size / 500000))), 0);
+  const hasLargeFile = selectedFiles.some(f => (pageEstimates[f.name + f.size] || Math.max(1, Math.round(f.size / 500000))) > 80);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -348,7 +375,7 @@ function FileUpload({ onUploadComplete }) {
           {/* File count summary */}
           {selectedFiles.length > 1 && (
             <p className="text-xs text-center text-slate-400">
-              {selectedFiles.length} files · {formatSize(totalSize)} total · ~{estimatePages(totalSize)} pages estimated
+              {selectedFiles.length} files · {formatSize(totalSize)} total · ~{totalPages} pages estimated
             </p>
           )}
         </div>
