@@ -104,10 +104,37 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
     }
   };
 
-  const handleDownload = () => {
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
     const file = job.outputFiles?.find((f) => f.format === 'docx');
-    const url  = file?.url || `/api/translate/download/${job.id}`;
-    window.open(url, '_blank');
+
+    // If cloud URL exists, open directly (no auth needed for public Supabase URLs)
+    if (file?.url) {
+      window.open(file.url, '_blank');
+      return;
+    }
+
+    // Otherwise download from server with auth token, then trigger save
+    setDownloading(true);
+    try {
+      const res = await authFetch(`/api/translate/download/${job.id}`);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = file?.name || `${job.originalName.replace('.docx', '')}_hindi.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error('Download error:', err);
+      alert('Download failed. Please try again.');
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const handleShare = async (e) => {
@@ -271,10 +298,11 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
                 <div className="flex gap-2">
                   <button
                     onClick={handleDownload}
-                    className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold py-3 rounded-xl transition shadow-sm shadow-indigo-200"
+                    disabled={downloading}
+                    className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white text-sm font-semibold py-3 rounded-xl transition shadow-sm shadow-indigo-200"
                   >
-                    <Download size={16} />
-                    Download Hindi DOCX
+                    {downloading ? <Loader size={16} className="animate-spin" /> : <Download size={16} />}
+                    {downloading ? 'Downloading...' : 'Download Hindi DOCX'}
                   </button>
                   {previewUrl && (
                     <button
