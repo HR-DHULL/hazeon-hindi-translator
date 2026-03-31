@@ -11,7 +11,6 @@ import {
   dbUpdateJob,
   dbGetJob,
   dbReservePages,
-  uploadOutputFile,
   dbGetGlossary,
 } from './database.js';
 import { scoreDocument } from './qualityScore.js';
@@ -128,23 +127,13 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     const docxPath = path.join(outputDir, docxFilename);
     await cloneAndTranslateDOCX(filePath, translatedParagraphs, docxPath);
 
-    await emit({ progress: 92, message: 'Finalizing translated document...' });
+    await emit({ progress: 95, message: 'Finalizing translated document...' });
 
-    // Step 4: Upload to Supabase Storage — skip for large files (>5MB) to avoid hanging
-    let docxUrl = null;
-    const docxSize = fs.statSync(docxPath).size;
-    if (docxSize <= 5 * 1024 * 1024) {
-      try {
-        docxUrl = await uploadOutputFile(jobId, docxFilename, docxPath);
-      } catch (uploadErr) {
-        console.warn('Supabase Storage upload failed, using local download:', uploadErr.message);
-      }
-    } else {
-      console.log(`  Output DOCX is ${(docxSize / 1024 / 1024).toFixed(1)}MB — skipping Supabase upload, using local download`);
-    }
+    // Step 4: Skip Supabase Storage upload entirely — serve via local download endpoint
+    // Supabase Storage uploads hang on Render free tier for large files.
+    console.log(`  Output DOCX: ${(fs.statSync(docxPath).size / 1024 / 1024).toFixed(1)}MB — serving via local download`);
 
-    // Step 4b: Save preview data with quality scores
-    let previewUrl = null;
+    // Step 4b: Compute quality scores locally (no upload)
     let qualityScore = null;
     try {
       const pairs = [];
@@ -154,41 +143,15 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
         }
       }
 
-      // Compute quality scores
       const quality = scoreDocument(pairs);
       qualityScore = quality.overall;
       console.log(`  Quality score: ${quality.overall}/100 (${quality.summary.perfect} perfect, ${quality.summary.good} good, ${quality.summary.needsReview} need review)`);
-
-      // Merge scores into preview data
-      const previewData = pairs.map((p, i) => ({
-        en: p.en,
-        hi: p.hi,
-        score: quality.paragraphs[i].score,
-        flags: quality.paragraphs[i].flags,
-      }));
-
-      const previewFilename = `${baseName}_preview.json`;
-      const previewPath = path.join(outputDir, previewFilename);
-      fs.writeFileSync(previewPath, JSON.stringify({
-        quality: { overall: quality.overall, summary: quality.summary },
-        paragraphs: previewData,
-      }));
-      // Preview JSON is small — upload should be quick, but timeout to be safe
-      const previewUploadTimeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Preview upload timed out')), 30000)
-      );
-      previewUrl = await Promise.race([
-        uploadOutputFile(jobId, previewFilename, previewPath),
-        previewUploadTimeout,
-      ]);
-      setTimeout(() => { try { fs.unlinkSync(previewPath); } catch {} }, 120_000);
-    } catch (previewErr) {
-      console.warn('Preview/quality data failed (non-fatal):', previewErr.message);
+    } catch (scoreErr) {
+      console.warn('Quality scoring failed (non-fatal):', scoreErr.message);
     }
 
     // Step 5: Mark complete
-    const outputFiles = [{ format: 'docx', name: docxFilename, path: docxPath, url: docxUrl }];
-    if (previewUrl) outputFiles.push({ format: 'preview', name: `${baseName}_preview.json`, url: previewUrl });
+    const outputFiles = [{ format: 'docx', name: docxFilename, path: docxPath }];
 
     await emit({
       status: 'completed',
@@ -201,8 +164,8 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
 
     // Pages already reserved atomically via dbReservePages above — no separate increment needed
 
-    // Cleanup local temp files — keep longer if serving locally (no Supabase URL)
-    const cleanupDelay = docxUrl ? 120_000 : 600_000; // 2min if uploaded, 10min if local
+    // Cleanup local temp files after 10 min (enough time to download)
+    const cleanupDelay = 600_000;
     setTimeout(() => {
       try { fs.unlinkSync(filePath); } catch {}
       try { fs.unlinkSync(docxPath); } catch {}
