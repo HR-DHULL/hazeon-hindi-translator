@@ -77,25 +77,41 @@ export async function uploadOutputFile(jobId, filename, filePath) {
   const fileBuffer = fs.readFileSync(filePath);
 
   const storagePath = `${jobId}/${filename}`;
+  const contentType = filename.endsWith('.json')
+    ? 'application/json'
+    : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-  // 60-second timeout to prevent hanging on large file uploads
-  const uploadPromise = supabase.storage
-    .from(OUTPUT_BUCKET)
-    .upload(storagePath, fileBuffer, {
-      contentType: filename.endsWith('.json')
-        ? 'application/json'
-        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      upsert: true,
+  // Use direct REST API instead of Supabase SDK — SDK hangs on large files
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  const url = `${supabaseUrl}/storage/v1/object/${OUTPUT_BUCKET}/${storagePath}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000); // 2 min timeout
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Content-Type': contentType,
+        'x-upsert': 'true',
+      },
+      body: fileBuffer,
+      signal: controller.signal,
     });
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('Storage upload timed out after 60s')), 60000)
-  );
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`Storage upload failed (${res.status}): ${errBody}`);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
 
-  const { error } = await Promise.race([uploadPromise, timeoutPromise]);
-  if (error) throw error;
-
-  const { data } = supabase.storage.from(OUTPUT_BUCKET).getPublicUrl(storagePath);
-  return data.publicUrl;
+  // Build public URL
+  const publicUrl = `${supabaseUrl}/storage/v1/object/public/${OUTPUT_BUCKET}/${storagePath}`;
+  return publicUrl;
 }
 
 // ─── User profile helpers (source of truth: user_profiles table) ─────────────

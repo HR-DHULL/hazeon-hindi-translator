@@ -11,6 +11,7 @@ import {
   dbUpdateJob,
   dbGetJob,
   dbReservePages,
+  uploadOutputFile,
   dbGetGlossary,
 } from './database.js';
 import { scoreDocument } from './qualityScore.js';
@@ -127,13 +128,18 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     const docxPath = path.join(outputDir, docxFilename);
     await cloneAndTranslateDOCX(filePath, translatedParagraphs, docxPath);
 
-    await emit({ progress: 95, message: 'Finalizing translated document...' });
+    await emit({ progress: 90, message: 'Uploading translated file to cloud...' });
 
-    // Step 4: Skip Supabase Storage upload entirely — serve via local download endpoint
-    // Supabase Storage uploads hang on Render free tier for large files.
-    console.log(`  Output DOCX: ${(fs.statSync(docxPath).size / 1024 / 1024).toFixed(1)}MB — serving via local download`);
+    // Step 4: Upload to Supabase Storage via direct REST API (SDK hangs on large files)
+    let docxUrl = null;
+    try {
+      docxUrl = await uploadOutputFile(jobId, docxFilename, docxPath);
+      console.log(`  Uploaded output DOCX to cloud: ${(fs.statSync(docxPath).size / 1024 / 1024).toFixed(1)}MB`);
+    } catch (uploadErr) {
+      console.warn('Cloud upload failed, using local download:', uploadErr.message);
+    }
 
-    // Step 4b: Compute quality scores locally (no upload)
+    // Step 4b: Compute quality scores
     let qualityScore = null;
     try {
       const pairs = [];
@@ -151,7 +157,7 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     }
 
     // Step 5: Mark complete
-    const outputFiles = [{ format: 'docx', name: docxFilename, path: docxPath }];
+    const outputFiles = [{ format: 'docx', name: docxFilename, path: docxPath, url: docxUrl }];
 
     await emit({
       status: 'completed',
