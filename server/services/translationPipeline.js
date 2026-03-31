@@ -128,14 +128,19 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     const docxPath = path.join(outputDir, docxFilename);
     await cloneAndTranslateDOCX(filePath, translatedParagraphs, docxPath);
 
-    await emit({ progress: 90, message: 'Saving translated file...' });
+    await emit({ progress: 92, message: 'Finalizing translated document...' });
 
-    // Step 4: Upload to Supabase Storage (with timeout — falls back to local download)
+    // Step 4: Upload to Supabase Storage — skip for large files (>5MB) to avoid hanging
     let docxUrl = null;
-    try {
-      docxUrl = await uploadOutputFile(jobId, docxFilename, docxPath);
-    } catch (uploadErr) {
-      console.warn('Supabase Storage upload failed/timed out, using local file:', uploadErr.message);
+    const docxSize = fs.statSync(docxPath).size;
+    if (docxSize <= 5 * 1024 * 1024) {
+      try {
+        docxUrl = await uploadOutputFile(jobId, docxFilename, docxPath);
+      } catch (uploadErr) {
+        console.warn('Supabase Storage upload failed, using local download:', uploadErr.message);
+      }
+    } else {
+      console.log(`  Output DOCX is ${(docxSize / 1024 / 1024).toFixed(1)}MB — skipping Supabase upload, using local download`);
     }
 
     // Step 4b: Save preview data with quality scores
@@ -168,7 +173,14 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
         quality: { overall: quality.overall, summary: quality.summary },
         paragraphs: previewData,
       }));
-      previewUrl = await uploadOutputFile(jobId, previewFilename, previewPath);
+      // Preview JSON is small — upload should be quick, but timeout to be safe
+      const previewUploadTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Preview upload timed out')), 30000)
+      );
+      previewUrl = await Promise.race([
+        uploadOutputFile(jobId, previewFilename, previewPath),
+        previewUploadTimeout,
+      ]);
       setTimeout(() => { try { fs.unlinkSync(previewPath); } catch {} }, 120_000);
     } catch (previewErr) {
       console.warn('Preview/quality data failed (non-fatal):', previewErr.message);
@@ -189,11 +201,12 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
 
     // Pages already reserved atomically via dbReservePages above — no separate increment needed
 
-    // Cleanup local temp files after 2 min
+    // Cleanup local temp files — keep longer if serving locally (no Supabase URL)
+    const cleanupDelay = docxUrl ? 120_000 : 600_000; // 2min if uploaded, 10min if local
     setTimeout(() => {
       try { fs.unlinkSync(filePath); } catch {}
       try { fs.unlinkSync(docxPath); } catch {}
-    }, 120_000);
+    }, cleanupDelay);
 
   } catch (error) {
     if (error.message === 'CANCELLED') {
