@@ -90,14 +90,14 @@ function AppShell() {
             if (!r.ok) return job;
             const data = await r.json();
 
-            // Stale detection
+            // Stale detection — only show timeout for genuinely stuck jobs
             if (data.status === 'processing') {
               const st = staleRef.current[job.id];
-              if (st && data.progress !== st.lastProgress) {
-                staleRef.current[job.id] = { lastProgress: data.progress, lastProgressAt: Date.now() };
-              } else if (st && Date.now() - st.lastProgressAt > 10 * 60 * 1000) {
+              if (st && (data.progress !== st.lastProgress || data.message !== st.lastMessage)) {
+                staleRef.current[job.id] = { lastProgress: data.progress, lastMessage: data.message, lastProgressAt: Date.now() };
+              } else if (st && Date.now() - st.lastProgressAt > 15 * 60 * 1000) {
                 data.status = 'failed';
-                data.message = 'Translation timed out. The document may be too large.';
+                data.message = 'Translation timed out. The document may be too large. Please try with a smaller file.';
               }
             }
 
