@@ -31,7 +31,7 @@ RULES:
 7. Numbers, dates, years, math formulas, percentages: keep unchanged.
 8. ⚠ MANDATORY: Translate EVERY English sentence, question stem, and option text into Hindi. If you see an English question like "Which of the following..." or "Consider the following statements..." — you MUST translate it. Leaving any English sentence untranslated is a critical error.
 9. Transliterate all person names and place names to Devanagari script: Annie Besant → एनी बेसेंट, A.O. Hume → ए.ओ. ह्यूम, Sarojini Naidu → सरोजिनी नायडू, Tilak → तिलक, Bombay → बंबई/मुंबई.
-10. Exam source citation tags like [UPPSC 2015], [UP Lower Sub. 2004] appear as placeholders EXAMREF0ENDREF, EXAMREF1ENDREF etc. — keep these placeholders EXACTLY as-is in your output. Do NOT translate, modify, or remove them.
+10. Exam source citation tags appear as §§0§§, §§1§§ etc. — keep these placeholders EXACTLY as-is in your output. Do NOT translate, modify, or remove them. They are technical markers.
 11. Output ONLY the translated text. No explanations, notes, or comments.`;
 
 // Precompute all prompts once at startup — enables Gemini implicit prefix caching
@@ -121,16 +121,15 @@ function protectExamTags(text) {
   const protected_ = text.replace(EXAM_TAG_REGEX, (match) => {
     const idx = tags.length;
     tags.push(match);
-    // Use EXAMREF format — looks like plain text, Gemini won't modify it
-    return `EXAMREF${idx}ENDREF`;
+    // Use §§ delimiters — Gemini treats these as code/symbols and won't translate them
+    return `§§${idx}§§`;
   });
   return { protected: protected_, tags };
 }
 
 function restoreExamTags(text, tags) {
   if (tags.length === 0) return text;
-  // Handle both clean EXAMREF0ENDREF and any variants Gemini might produce
-  return text.replace(/EXAMREF(\d+)ENDREF/g, (_, idx) => tags[parseInt(idx, 10)] ?? '');
+  return text.replace(/§§(\d+)§§/g, (_, idx) => tags[parseInt(idx, 10)] ?? '');
 }
 
 /**
@@ -465,7 +464,7 @@ async function forceTranslateSingle(text) {
 
   const model = genAI.getGenerativeModel({
     model: GEMINI_MODEL,
-    systemInstruction: `Translate the given text fully into Hindi (Devanagari script) for UPSC exam material. Keep only: acronyms (UPSC, GDP, RBI, etc.), MCQ option labels (a)(b)(c)(d), single-letter variables (A, B, C), Roman numerals (I, II, III), numbers, and math formulas. Translate EVERYTHING else. Output ONLY the Hindi translation — no explanations.`,
+    systemInstruction: `Translate the given text fully into Hindi (Devanagari script) for UPSC exam material. Keep only: acronyms (UPSC, GDP, RBI, etc.), MCQ option labels (a)(b)(c)(d), single-letter variables (A, B, C), Roman numerals (I, II, III), numbers, math formulas, and §§N§§ placeholders. Translate EVERYTHING else. Output ONLY the Hindi translation — no explanations.`,
     generationConfig: { temperature: 0.0, thinkingConfig: { thinkingBudget: 0 } },
   });
   const result = await Promise.race([
