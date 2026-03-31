@@ -58,6 +58,9 @@ export default function AdminUsers() {
     }
   };
 
+  const [editingLimit, setEditingLimit] = useState(null); // user id being edited
+  const [newLimit, setNewLimit] = useState('');
+
   const toggleActive = async (id, currentlyActive) => {
     try {
       const r = await authFetch(`/api/auth/users/${id}`, {
@@ -72,6 +75,44 @@ export default function AdminUsers() {
       load();
     } catch {
       setMsg('Network error updating user');
+    }
+  };
+
+  const updatePagesLimit = async (id) => {
+    const limit = parseInt(newLimit, 10);
+    if (!limit || limit < 1) return;
+    try {
+      const r = await authFetch(`/api/auth/users/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ pagesLimit: limit }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setMsg(d.error || 'Failed to update limit');
+        return;
+      }
+      setEditingLimit(null);
+      load();
+    } catch {
+      setMsg('Network error updating limit');
+    }
+  };
+
+  const resetUsage = async (id) => {
+    if (!confirm('Reset pages used to 0?')) return;
+    try {
+      const r = await authFetch(`/api/auth/users/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ pagesUsed: 0 }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setMsg(d.error || 'Failed to reset usage');
+        return;
+      }
+      load();
+    } catch {
+      setMsg('Network error');
     }
   };
 
@@ -193,21 +234,48 @@ export default function AdminUsers() {
                       </span>
                     </td>
                     <td className="px-5 py-3.5">
-                      <div className="flex items-center gap-2">
-                        <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                          <div className="h-full bg-indigo-500 rounded-full"
-                            style={{ width: `${Math.min(100, ((u.pages_used || 0) / (u.pages_limit || 500)) * 100)}%` }} />
+                      {editingLimit === u.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <input type="number" min={1} value={newLimit}
+                            onChange={e => setNewLimit(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && updatePagesLimit(u.id)}
+                            className="w-20 border border-indigo-300 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                            autoFocus />
+                          <button onClick={() => updatePagesLimit(u.id)}
+                            className="text-xs text-green-600 hover:text-green-800 font-medium">Save</button>
+                          <button onClick={() => setEditingLimit(null)}
+                            className="text-xs text-slate-400 hover:text-slate-600">Cancel</button>
                         </div>
-                        <span className="text-slate-500 text-xs">{u.pages_used || 0}/{u.pages_limit || 500}</span>
-                      </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${
+                              ((u.pages_used || 0) / (u.pages_limit || 500)) > 0.9 ? 'bg-red-500' :
+                              ((u.pages_used || 0) / (u.pages_limit || 500)) > 0.7 ? 'bg-amber-500' : 'bg-indigo-500'
+                            }`} style={{ width: `${Math.min(100, ((u.pages_used || 0) / (u.pages_limit || 500)) * 100)}%` }} />
+                          </div>
+                          <button onClick={() => { setEditingLimit(u.id); setNewLimit(String(u.pages_limit || 500)); }}
+                            className="text-slate-600 text-xs hover:text-indigo-600 cursor-pointer" title="Click to edit limit">
+                            {u.pages_used || 0} / {u.pages_limit || 500}
+                          </button>
+                        </div>
+                      )}
                     </td>
                     <td className="px-5 py-3.5">
-                      {u.role !== 'admin' && (
-                        <button onClick={() => deleteUser(u.id, u.email)}
-                          className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded-lg hover:bg-red-50 transition">
-                          Delete
-                        </button>
-                      )}
+                      <div className="flex items-center gap-1">
+                        {u.role !== 'admin' && (
+                          <>
+                            <button onClick={() => resetUsage(u.id)}
+                              className="text-xs text-slate-500 hover:text-indigo-700 font-medium px-2 py-1 rounded-lg hover:bg-indigo-50 transition" title="Reset pages used to 0">
+                              Reset
+                            </button>
+                            <button onClick={() => deleteUser(u.id, u.email)}
+                              className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded-lg hover:bg-red-50 transition">
+                              Delete
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

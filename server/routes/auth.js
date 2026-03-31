@@ -305,16 +305,18 @@ router.patch('/users/:id', requireAuth, requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Invalid user ID' });
   }
   const { fullName, active } = req.body;
-  // Sanitize role/plan/pagesLimit
+  // Sanitize role/plan/pagesLimit/pagesUsed
   const role = req.body.role !== undefined && VALID_ROLES.includes(req.body.role) ? req.body.role : undefined;
   const plan = req.body.plan !== undefined && VALID_PLANS.includes(req.body.plan) ? req.body.plan : undefined;
   const pagesLimit = req.body.pagesLimit !== undefined ? Math.max(1, Math.min(99999, parseInt(req.body.pagesLimit) || 500)) : undefined;
+  const pagesUsed = req.body.pagesUsed !== undefined ? Math.max(0, parseInt(req.body.pagesUsed) || 0) : undefined;
 
   const profileUpdates = {};
   if (fullName !== undefined)   profileUpdates.full_name = fullName;
   if (role !== undefined)       profileUpdates.role = role;
   if (plan !== undefined)       profileUpdates.plan = plan;
   if (pagesLimit !== undefined) profileUpdates.pages_limit = pagesLimit;
+  if (pagesUsed !== undefined)  profileUpdates.pages_used = pagesUsed;
 
   if (Object.keys(profileUpdates).length > 0) {
     try {
