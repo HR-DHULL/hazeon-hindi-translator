@@ -331,6 +331,60 @@ router.get('/download/:jobId/:format', requireAuth, async (req, res) => {
   res.redirect(`/api/translate/download/${req.params.jobId}`);
 });
 
+// ─── POST /api/translate/upload-output/:jobId ───────────────────────────────
+// Client-side relay: after downloading the DOCX from server, client uploads
+// to Supabase via signed URL and then updates the job with the cloud URL.
+router.post('/upload-output/:jobId', requireAuth, async (req, res) => {
+  const { url: cloudUrl } = req.body;
+  if (!cloudUrl) return res.status(400).json({ error: 'url is required' });
+
+  try {
+    const job = await dbGetJob(req.params.jobId);
+    if (job.userId && job.userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    // Update the DOCX output file with the cloud URL
+    const outputFiles = (job.outputFiles || []).map(f =>
+      f.format === 'docx' ? { ...f, url: cloudUrl } : f
+    );
+
+    await dbUpdateJob(req.params.jobId, { outputFiles });
+    res.json({ message: 'Cloud URL saved', url: cloudUrl });
+  } catch {
+    res.status(404).json({ error: 'Job not found' });
+  }
+});
+
+// ─── GET /api/translate/signed-upload-url/:jobId ────────────────────────────
+// Generate a Supabase Storage signed upload URL for the client to upload the output DOCX.
+router.get('/signed-upload-url/:jobId', requireAuth, async (req, res) => {
+  try {
+    const job = await dbGetJob(req.params.jobId);
+    if (job.userId && job.userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    const file = job.outputFiles?.find(f => f.format === 'docx');
+    if (!file) return res.status(404).json({ error: 'No output file' });
+
+    const { createClient } = await import('@supabase/supabase-js');
+    const supa = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+    const storagePath = `${req.params.jobId}/${file.name}`;
+
+    const { data, error } = await supa.storage
+      .from('outputs')
+      .createSignedUploadUrl(storagePath, { upsert: true });
+    if (error) throw error;
+
+    const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/outputs/${storagePath}`;
+    res.json({ signedUrl: data.signedUrl, publicUrl, filename: file.name });
+  } catch (err) {
+    console.error('Signed URL error:', err.message);
+    res.status(500).json({ error: 'Failed to generate upload URL' });
+  }
+});
+
 // ─── GET /api/translate/jobs ──────────────────────────────────────────────────
 router.get('/jobs', requireAuth, async (req, res) => {
   try {

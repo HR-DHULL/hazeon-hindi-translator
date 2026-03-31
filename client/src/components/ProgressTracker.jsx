@@ -36,8 +36,57 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
   const [cancelling, setCancelling]   = useState(false);
   const [cancelErr, setCancelErr]     = useState('');
   const [showPreview, setShowPreview] = useState(false);
+  const [cloudUploadStatus, setCloudUploadStatus] = useState(''); // '', 'uploading', 'done', 'failed'
 
   const previewUrl = job.outputFiles?.find(f => f.format === 'preview')?.url;
+  const docxFile = job.outputFiles?.find(f => f.format === 'docx');
+  const hasCloudUrl = !!docxFile?.url;
+
+  // Client-side relay: when job completes without a cloud URL, download from
+  // server and re-upload to Supabase Storage via signed URL (browser → Supabase
+  // works reliably, unlike Render → Supabase which hangs on large files).
+  const relayAttemptedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!isComplete || hasCloudUrl || relayAttemptedRef.current || !job.id) return;
+    relayAttemptedRef.current = true;
+
+    (async () => {
+      try {
+        setCloudUploadStatus('uploading');
+
+        // 1. Get signed upload URL from server
+        const urlRes = await authFetch(`/api/translate/signed-upload-url/${job.id}`);
+        if (!urlRes.ok) throw new Error('Failed to get upload URL');
+        const { signedUrl, publicUrl } = await urlRes.json();
+
+        // 2. Download the DOCX from server as blob
+        const dlRes = await authFetch(`/api/translate/download/${job.id}`);
+        if (!dlRes.ok) throw new Error('Failed to download file');
+        const blob = await dlRes.blob();
+
+        // 3. Upload blob to Supabase via signed URL (browser → Supabase = fast & reliable)
+        const uploadRes = await fetch(signedUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+          body: blob,
+        });
+        if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
+
+        // 4. Save cloud URL back to the job in DB
+        await authFetch(`/api/translate/upload-output/${job.id}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: publicUrl }),
+        });
+
+        setCloudUploadStatus('done');
+        console.log('Cloud upload complete:', publicUrl);
+      } catch (err) {
+        console.warn('Cloud relay upload failed (download still works):', err.message);
+        setCloudUploadStatus('failed');
+      }
+    })();
+  }, [isComplete, hasCloudUrl, job.id, authFetch]);
 
   const handleCancel = async () => {
     if (!confirm('Stop this translation? Progress so far will be lost.')) return;
@@ -202,6 +251,20 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
           {/* Download + share section */}
           {isComplete && (
             <div className="space-y-3">
+              {/* Cloud upload status */}
+              {cloudUploadStatus === 'uploading' && (
+                <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-xl px-4 py-2.5">
+                  <Loader size={13} className="text-blue-500 animate-spin" />
+                  <p className="text-xs text-blue-700">Saving to cloud for permanent download link...</p>
+                </div>
+              )}
+              {cloudUploadStatus === 'done' && (
+                <div className="flex items-center gap-2 bg-green-50 border border-green-100 rounded-xl px-4 py-2.5">
+                  <CheckCircle size={13} className="text-green-500" />
+                  <p className="text-xs text-green-700">Saved to cloud — download link is permanent</p>
+                </div>
+              )}
+
               {/* Download + Preview */}
               <div className="bg-green-50 border border-green-100 rounded-xl px-4 py-4">
                 <p className="text-xs font-semibold text-green-800 mb-3">Translation complete</p>
@@ -211,7 +274,7 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
                     className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold py-3 rounded-xl transition shadow-sm shadow-indigo-200"
                   >
                     <Download size={16} />
-                    Download DOCX
+                    Download Hindi DOCX
                   </button>
                   {previewUrl && (
                     <button
