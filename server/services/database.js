@@ -303,6 +303,7 @@ export async function dbCleanupZombieJobs(maxAgeMinutes = 15) {
 function jobToRow(job) {
   return {
     id: job.id,
+    user_id: job.userId,
     original_name: job.originalName,
     book_context: job.bookContext || '',
     status: job.status,
