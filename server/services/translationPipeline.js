@@ -11,6 +11,7 @@ import {
   dbUpdateJob,
   dbGetJob,
   dbReservePages,
+  dbIncrementPages,
   dbGetGlossary,
 } from './database.js';
 // Quality scoring disabled — adds memory pressure on 512MB Render, causing OOM
