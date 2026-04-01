@@ -11,7 +11,7 @@ import AdminUsers from './components/AdminUsers';
 import GlossaryManager from './components/GlossaryManager';
 
 function AppShell() {
-  const { isLoggedIn, authFetch, logout } = useAuth();
+  const { isLoggedIn, isAdmin, authFetch, logout } = useAuth();
   const [currentJobs, setCurrentJobs] = useState([]);   // array of active jobs
   const [jobs, setJobs]               = useState([]);
   const [view, setView]               = useState('upload');
