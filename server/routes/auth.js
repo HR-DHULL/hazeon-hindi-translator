@@ -321,9 +321,10 @@ router.patch('/users/:id', requireAuth, requireAdmin, async (req, res) => {
   if (Object.keys(profileUpdates).length > 0) {
     try {
       await restPatch(`user_profiles?id=eq.${req.params.id}`, profileUpdates);
+      console.log(`  Profile updated for ${req.params.id}:`, profileUpdates);
     } catch (err) {
-      console.warn('Profile update failed (table may not exist):', err.message);
-      // Non-fatal — app_metadata sync below is the primary source of truth
+      console.error('Profile update FAILED:', err.message, 'Updates:', profileUpdates);
+      return res.status(500).json({ error: `Failed to update user profile: ${err.message}` });
     }
   }
 
