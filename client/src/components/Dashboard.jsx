@@ -232,9 +232,9 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch, isAdmin }) {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-slate-800 truncate">{job.originalName}</p>
                     <div className="flex items-center gap-1.5 mt-0.5 text-xs text-slate-400">
-                      {isAdmin && (job.userName || job.userEmail) && (
+                      {isAdmin && (
                         <>
-                          <span className="text-indigo-500 font-medium">{job.userName || job.userEmail}</span>
+                          <span className="text-indigo-500 font-medium">{job.userName || job.userEmail || 'Unknown user'}</span>
                           <span>·</span>
                         </>
                       )}

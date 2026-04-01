@@ -51,22 +51,40 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
 
     // Atomically reserve pages to prevent TOCTOU race condition
     // (two simultaneous uploads both passing the initial check)
+    // Track pages for ALL users including admin
     let pagesReserved = false;
-    if (userRole !== 'admin' && userId) {
+    if (userId) {
       try {
         const reservation = await dbReservePages(userId, pageCount);
         if (!reservation.success) {
-          const msg = reservation.remaining !== undefined
-            ? `Page limit would be exceeded. You have ${reservation.remaining} page(s) remaining but this document has ${pageCount} page(s). Contact admin to increase your limit.`
-            : 'Page limit would be exceeded. Contact admin to increase your limit.';
-          throw new Error(msg);
+          // Admin bypasses limit enforcement but still tracks usage
+          if (userRole === 'admin') {
+            console.log(`  Admin page limit exceeded but bypassed (${reservation.remaining} remaining, ${pageCount} needed)`);
+            // Still increment pages for admin tracking
+            await dbIncrementPages(userId, pageCount);
+            pagesReserved = true;
+          } else {
+            const msg = reservation.remaining !== undefined
+              ? `Page limit would be exceeded. You have ${reservation.remaining} page(s) remaining but this document has ${pageCount} page(s). Contact admin to increase your limit.`
+              : 'Page limit would be exceeded. Contact admin to increase your limit.';
+            throw new Error(msg);
+          }
+        } else {
+          pagesReserved = true;
         }
-        pagesReserved = true;
       } catch (e) {
         if (e.message && e.message.includes('Page limit')) {
           throw e;
         }
-        console.warn('Page reservation failed (non-fatal):', e.message);
+        console.error('Page reservation failed:', e.message);
+        // Fallback: try simple increment if atomic reserve fails
+        try {
+          await dbIncrementPages(userId, pageCount);
+          pagesReserved = true;
+          console.log(`  Fallback page increment succeeded for ${userId}`);
+        } catch (incErr) {
+          console.error('Fallback page increment also failed:', incErr.message);
+        }
       }
     }
 
