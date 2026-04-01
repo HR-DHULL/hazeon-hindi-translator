@@ -90,6 +90,12 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
       let translatedLine = translatedParagraphs[paraIndex];
       paraIndex++;
 
+      // Safety: strip any §§ placeholder and <<<PN>>> marker artifacts before writing to DOCX
+      if (translatedLine) {
+        translatedLine = translatedLine.replace(/§\s*§?\s*\d+\s*§?\s*§/g, '');
+        translatedLine = translatedLine.replace(/<<<P?\d+>>>/g, '');
+      }
+
       // If this paragraph uses Word's automatic list numbering (<w:numPr>), the letter
       // label (a, b, c, d) is already rendered by the list style — strip any manual
       // (a)/(b)/(c)/(d) prefix from the translated text to avoid double labels like

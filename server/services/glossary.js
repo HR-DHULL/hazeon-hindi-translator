@@ -720,6 +720,12 @@ export const UPSC_HCS_GLOSSARY = {
   'Peasant Movement': 'किसान आंदोलन',
   'Tribal Revolt': 'जनजातीय विद्रोह',
 
+  // ── Cross-Subject Common Terms ─────────────────────────────────────────────
+  'Diwan': 'दीवान',
+  'Waqf': 'वक्फ',
+  'Sultan': 'सुल्तान',
+  'Firman': 'फरमान',
+
   // ── Ethics & Governance (GS Paper IV) ──────────────────────────────────────
   'Ethics': 'नैतिकता',
   'Integrity': 'सत्यनिष्ठा',
@@ -1325,6 +1331,91 @@ export const SUBJECT_GLOSSARIES = {
     'Poona Pact': 'पूना पैक्ट',
     'Gandhi-Irwin Pact': 'गांधी-इर्विन समझौता',
     'Lucknow Pact': 'लखनऊ समझौता',
+    // Mughal Administrative Titles & Offices
+    'Desai': 'देसाई',
+    'Deshpande': 'देशपांडे',
+    'Deshmukh': 'देशमुख',
+    'Diwan': 'दीवान',
+    'Dewan': 'दीवान',
+    'Mir Bakshi': 'मीर बख्शी',
+    'Sadr': 'सदर',
+    'Sadr-us-Sudur': 'सदर-उस-सुदूर',
+    'Qazi': 'काज़ी',
+    'Kotwal': 'कोतवाल',
+    'Muhtasib': 'मुहतसिब',
+    'Wakil': 'वकील',
+    'Wazir': 'वज़ीर',
+    'Vakil': 'वकील',
+    'Subedar': 'सूबेदार',
+    'Subah': 'सूबा',
+    'Sarkar': 'सरकार',
+    'Pargana': 'परगना',
+    'Faujdar': 'फौजदार',
+    'Amil': 'आमिल',
+    'Amin': 'अमीन',
+    'Qanungo': 'कानूनगो',
+    'Karkhana': 'कारखाना',
+    'Khalisa': 'खालसा',
+    'Khalisa Land': 'खालसा भूमि',
+    'Karori': 'करोड़ी',
+    'Sultan': 'सुल्तान',
+    'Firman': 'फरमान',
+    'Hukumnama': 'हुक्मनामा',
+    'Naib': 'नायब',
+    // Revenue, Currency & Measurement Terms
+    'Dam': 'दाम',
+    'Tanka': 'टंका',
+    'Jital': 'जीतल',
+    'Jarib': 'जरीब',
+    'Bigha': 'बीघा',
+    'Biswa': 'बिस्वा',
+    'Kharaj': 'खराज',
+    'Jizya': 'जजिया',
+    'Jaziya': 'जजिया',
+    'Zakat': 'ज़कात',
+    'Ushr': 'उश्र',
+    'Kankut': 'कनकूत',
+    'Zabti': 'ज़ब्ती',
+    'Dahsala': 'दहसाला',
+    'Nasaq': 'नसक',
+    'Batai': 'बटाई',
+    'Ghalla Bakshi': 'गल्ला बख्शी',
+    // Intelligence, Military & Institutional Terms
+    'Barid': 'बरीद',
+    'Barid-i-Mumalik': 'बरीद-ई-ममालिक',
+    'Waqf': 'वक्फ',
+    'Inam': 'इनाम',
+    'Madad-i-Maash': 'मदद-ए-माश',
+    'Altamgha': 'अल्तमगा',
+    'Suyurghal': 'सुयूरगल',
+    // Mughal Departments
+    'Diwan-i-Arz': 'दीवान-ए-अर्ज़',
+    'Diwan-i-Insha': 'दीवान-ए-इंशा',
+    'Diwan-i-Rasalat': 'दीवान-ए-रसालत',
+    'Diwan-i-Wazarat': 'दीवान-ए-वज़ारत',
+    'Diwan-i-Kohi': 'दीवान-ए-कोही',
+    'Diwan-i-Mustakharaj': 'दीवान-ए-मुस्तखराज',
+    'Diwan-i-Risalat': 'दीवान-ए-रिसालत',
+    'Diwan-i-Bandagan': 'दीवान-ए-बंदगान',
+    'Ibadat Khana': 'इबादत खाना',
+    'Din-i-Ilahi': 'दीन-ए-इलाही',
+    'Sulh-i-Kul': 'सुलह-ए-कुल',
+    'Jharokha Darshan': 'झरोखा दर्शन',
+    // Sultanate-specific Terms
+    'Arz-i-Mamalik': 'अर्ज़-ई-ममालिक',
+    'Mushrif-i-Mamalik': 'मुशरिफ-ए-ममालिक',
+    'Dabir-i-Khas': 'दबीर-ए-खास',
+    // Maratha Administrative Terms
+    'Chauth': 'चौथ',
+    'Sardeshmukhi': 'सरदेशमुखी',
+    'Ashtapradhan': 'अष्टप्रधान',
+    'Sar-i-Naubat': 'सर-ए-नौबत',
+    'Sachiv': 'सचिव',
+    'Sumant': 'सुमंत',
+    'Nyayadhish': 'न्यायाधीश',
+    'Panditrao': 'पंडितराव',
+    'Senapati': 'सेनापति',
+    'Majumdar': 'मजुमदार',
   },
 
   // ── GEOGRAPHY ───────────────────────────────────────────────────────────────
@@ -1505,6 +1596,16 @@ export const SUBJECT_GLOSSARIES = {
     'Zaid Crop': 'जायद फसल',
     'Cash Crop': 'नकदी फसल',
     'Food Crop': 'खाद्य फसल',
+    // Indian Geographical Terms
+    'Doab': 'दोआब',
+    'Terai': 'तराई',
+    'Bhabar': 'भाबर',
+    'Bhangar': 'भांगर',
+    'Bangar': 'बांगर',
+    'Khadar': 'खादर',
+    'Rann': 'रन',
+    'Maidan': 'मैदान',
+    'Regur': 'रेगुर',
   },
 
   // ── ECONOMICS ───────────────────────────────────────────────────────────────
@@ -1653,6 +1754,15 @@ export const SUBJECT_GLOSSARIES = {
     'Disinvestment': 'विनिवेश',
     'Strategic Sale': 'रणनीतिक विक्रय',
     'Asset Monetisation': 'संपत्ति मुद्रीकरण',
+    // Traditional Financial Terms
+    'Hawala': 'हवाला',
+    'Hundi': 'हुंडी',
+    'Sarraf': 'सर्राफ',
+    'Benami': 'बेनामी',
+    'Benami Property': 'बेनामी संपत्ति',
+    'Black Money': 'काला धन',
+    'Chit Fund': 'चिट फंड',
+    'Shell Company': 'शेल कंपनी',
   },
 
   // ── SCIENCE & TECHNOLOGY ────────────────────────────────────────────────────
@@ -1905,6 +2015,18 @@ export const SUBJECT_GLOSSARIES = {
     'Vector': 'वाहक',
     'Zoonosis': 'जूनोसिस',
     'Prion': 'प्रियॉन',
+    // Units of Measurement
+    'Calorie': 'कैलोरी',
+    'Kilocalorie': 'किलोकैलोरी',
+    'Joule': 'जूल',
+    'Pascal': 'पास्कल',
+    'Watt': 'वाट',
+    'Hertz': 'हर्ट्ज',
+    'Decibel': 'डेसिबल',
+    'Pressure': 'दाब',
+    'Kelvin': 'केल्विन',
+    'Celsius': 'सेल्सियस',
+    'Fahrenheit': 'फ़ारेनहाइट',
   },
 
   // ── ENVIRONMENT & ECOLOGY ────────────────────────────────────────────────────
@@ -2052,6 +2174,12 @@ export const SUBJECT_GLOSSARIES = {
     'Joint Forest Management': 'संयुक्त वन प्रबंधन',
     'Chipko Movement': 'चिपको आंदोलन',
     'Bishnoi Movement': 'बिश्नोई आंदोलन',
+    // Additional Environment Terms
+    'Biodiversity Hotspot': 'जैव विविधता हॉटस्पॉट',
+    'Sacred Grove': 'पवित्र उपवन',
+    'Vermicompost': 'वर्मीकंपोस्ट',
+    'Phytoremediation': 'पादप उपचार',
+    'Bioremediation': 'जैव उपचार',
   },
 
   // ── POLITY (extras beyond base glossary) ────────────────────────────────────
@@ -2204,14 +2332,15 @@ export const SUBJECT_GLOSSARIES = {
  * Injects subject-specific terms first (HIGH PRIORITY), then base glossary.
  */
 export function getGlossaryPrompt(subject = null) {
+  // Compact format: "Term=Hindi" saves ~30% tokens vs "Term" → "Hindi"
   const baseEntries = Object.entries(UPSC_HCS_GLOSSARY)
-    .map(([en, hi]) => `"${en}" → "${hi}"`)
+    .map(([en, hi]) => `${en}=${hi}`)
     .join('\n');
 
   let subjectSection = '';
   if (subject && SUBJECT_GLOSSARIES[subject]) {
     const subjectEntries = Object.entries(SUBJECT_GLOSSARIES[subject])
-      .map(([en, hi]) => `"${en}" → "${hi}"`)
+      .map(([en, hi]) => `${en}=${hi}`)
       .join('\n');
     subjectSection = `## ${subject.toUpperCase()} GLOSSARY (apply these first):
 ${subjectEntries}

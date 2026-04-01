@@ -15,7 +15,7 @@ const genAI = process.env.GEMINI_API_KEY
 if (genAI) console.log('  Translation engine: Google Gemini (context-aware UPSC/HCS mode)');
 
 // ── Gemini model ─────────────────────────────────────────────────────────────
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
 // Base prompt — glossary is injected separately via buildSystemPrompt()
@@ -84,10 +84,10 @@ function hasUntranslatedEnglish(text, original) {
   // Trigger retry if:
   // - Single English term before colon (historical term pattern)
   // - OR single MCQ option that is entirely English
-  // - OR 2+ non-allowed English words AND ratio > 20%
-  // - OR any complete English sentence detected (5+ consecutive words)
-  const hasEnglishSentence = /\b[A-Z][a-z]+(\s+[a-zA-Z]+){4,}/.test(text);
-  return startsWithEnglishTerm || isSingleOptionEnglish || (engWords.length >= 2 && engRatio > 0.20) || hasEnglishSentence;
+  // - OR 3+ non-allowed English words AND ratio > 35% (relaxed — glossary handles most terms now)
+  // - OR any complete English sentence detected (6+ consecutive words)
+  const hasEnglishSentence = /\b[A-Z][a-z]+(\s+[a-zA-Z]+){5,}/.test(text);
+  return startsWithEnglishTerm || isSingleOptionEnglish || (engWords.length >= 3 && engRatio > 0.35) || hasEnglishSentence;
 }
 
 // ── Exam source tag protection ────────────────────────────────────────────────
@@ -129,7 +129,13 @@ function protectExamTags(text) {
 
 function restoreExamTags(text, tags) {
   if (tags.length === 0) return text;
-  return text.replace(/§§(\d+)§§/g, (_, idx) => tags[parseInt(idx, 10)] ?? '');
+  // Robust regex: handles spaces Gemini may insert around the placeholder
+  let result = text.replace(/§\s*§\s*(\d+)\s*§\s*§/g, (_, idx) => tags[parseInt(idx, 10)] ?? '');
+  // Fallback: single § variant (Gemini sometimes drops one §)
+  if (/§\s*\d+\s*§/.test(result) && !/§§/.test(result)) {
+    result = result.replace(/§\s*(\d+)\s*§/g, (_, idx) => tags[parseInt(idx, 10)] ?? '');
+  }
+  return result;
 }
 
 /**
@@ -172,7 +178,6 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
     systemInstruction: systemPrompt,
     generationConfig: {
       temperature: 0.1,
-      thinkingConfig: { thinkingBudget: 0 },
     },
   });
 
@@ -186,8 +191,8 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
   const result = await Promise.race([model.generateContent(userMsg), timeoutPromise]);
   const rawOutput = result.response.text();
 
-  // Split on <<<P1>>>, <<<P2>>>... markers
-  const parts = rawOutput.split(/\n*<<<P(\d+)>>>\s*/);
+  // Split on <<<P1>>>, <<<P2>>>... markers (also match <<<1>>> without P — Gemini sometimes drops it)
+  const parts = rawOutput.split(/\n*<<<P?(\d+)>>>\s*/);
   const parsed = Array(paragraphs.length).fill('');
   for (let i = 1; i < parts.length - 1; i += 2) {
     const idx = parseInt(parts[i], 10) - 1;
@@ -308,12 +313,20 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
   }
 
   const verified  = await verifyAndFixTranslations(paragraphs, translated, onProgress, examCitationIndices);
-  return fixMissingMCQLabels(verified);
+
+  // Final safety: strip any §§N§§ placeholders and <<<PN>>> markers that survived the pipeline
+  const sanitized = verified.map(p => {
+    if (!p) return p;
+    let clean = p.replace(/§\s*§?\s*\d+\s*§?\s*§/g, '');
+    clean = clean.replace(/<<<P?\d+>>>/g, '');
+    return clean;
+  });
+  return fixMissingMCQLabels(sanitized);
 }
 
 // ── Gemini paragraph translation (batched, parallel, with translation memory) ─
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  const BATCH_SIZE = 20;
+  const BATCH_SIZE = 30;
   const CONCURRENCY = 5; // Paid API key — run 5 batches in parallel
 
   const translated = new Array(paragraphs.length).fill('');
@@ -400,7 +413,12 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
             t = applyHindiCorrections(t);
             const origIdx = batchOriginalIndices[localIdx];
             translated[origIdx] = t;
-            newTranslations.push({ source: batch[localIdx], translated: t });
+            // Safety: never cache text that still has unreplaced §§ placeholders
+            if (!/§§?\s*\d+\s*§§?/.test(t)) {
+              newTranslations.push({ source: batch[localIdx], translated: t });
+            } else {
+              console.warn(`  WARNING: Paragraph ${origIdx} still has §§ placeholder — skipping cache`);
+            }
           });
         }
       } catch (err) {
@@ -419,7 +437,9 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
             t = applyGlossaryPostProcessing(t, batch[i]);
             t = applyHindiCorrections(t);
             translated[origIdx] = t;
-            newTranslations.push({ source: batch[i], translated: t });
+            if (!/§§?\s*\d+\s*§§?/.test(t)) {
+              newTranslations.push({ source: batch[i], translated: t });
+            }
           } catch (retryErr) {
             if (/429|quota|rate.?limit/i.test(retryErr.message)) {
               await new Promise(r => setTimeout(r, 5000));
@@ -429,7 +449,9 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
                 t = applyGlossaryPostProcessing(t, batch[i]);
                 t = applyHindiCorrections(t);
                 translated[origIdx] = t;
-                newTranslations.push({ source: batch[i], translated: t });
+                if (!/§§?\s*\d+\s*§§?/.test(t)) {
+                  newTranslations.push({ source: batch[i], translated: t });
+                }
                 continue;
               } catch (_) {}
             }
@@ -465,7 +487,7 @@ async function forceTranslateSingle(text) {
   const model = genAI.getGenerativeModel({
     model: GEMINI_MODEL,
     systemInstruction: `Translate the given text fully into Hindi (Devanagari script) for UPSC exam material. Keep only: acronyms (UPSC, GDP, RBI, etc.), MCQ option labels (a)(b)(c)(d), single-letter variables (A, B, C), Roman numerals (I, II, III), numbers, math formulas, and §§N§§ placeholders. Translate EVERYTHING else. Output ONLY the Hindi translation — no explanations.`,
-    generationConfig: { temperature: 0.0, thinkingConfig: { thinkingBudget: 0 } },
+    generationConfig: { temperature: 0.0 },
   });
   const result = await Promise.race([
     model.generateContent(`Translate to Hindi:\n${safeText}`),
@@ -496,6 +518,13 @@ async function verifyAndFixTranslations(originals, translated, onProgress, skipI
   if (problematic.length === 0) {
     console.log('  Two-pass review: all paragraphs look fully translated ✓');
     return translated;
+  }
+
+  // Cap second-pass retries to limit API cost
+  const MAX_SECOND_PASS = 15;
+  if (problematic.length > MAX_SECOND_PASS) {
+    console.log(`  Two-pass review: capping from ${problematic.length} → ${MAX_SECOND_PASS} paragraphs to limit API cost`);
+    problematic.length = MAX_SECOND_PASS;
   }
 
   console.log(`  Two-pass review: ${problematic.length} paragraphs still contain English — force-translating...`);
