@@ -39,6 +39,9 @@ if (process.env.NODE_ENV !== 'production') {
 
 const app = express();
 
+// Trust proxy (Render, etc.) — required for express-rate-limit behind reverse proxy
+app.set('trust proxy', 1);
+
 // ── CORS: restrict to allowed origins ─────────────────────────────────────
 // Priority: ALLOWED_ORIGINS env var → Vercel deployment URL → dev wildcard
 const allowedOrigins = process.env.ALLOWED_ORIGINS
