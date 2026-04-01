@@ -15,7 +15,8 @@ const genAI = process.env.GEMINI_API_KEY
 if (genAI) console.log('  Translation engine: Google Gemini (context-aware UPSC/HCS mode)');
 
 // ── Gemini model ─────────────────────────────────────────────────────────────
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const IS_THINKING_MODEL = GEMINI_MODEL.includes('2.5');
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
 // Base prompt — glossary is injected separately via buildSystemPrompt()
@@ -178,6 +179,7 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
     systemInstruction: systemPrompt,
     generationConfig: {
       temperature: 0.1,
+      ...(IS_THINKING_MODEL ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
     },
   });
 
@@ -487,7 +489,7 @@ async function forceTranslateSingle(text) {
   const model = genAI.getGenerativeModel({
     model: GEMINI_MODEL,
     systemInstruction: `Translate the given text fully into Hindi (Devanagari script) for UPSC exam material. Keep only: acronyms (UPSC, GDP, RBI, etc.), MCQ option labels (a)(b)(c)(d), single-letter variables (A, B, C), Roman numerals (I, II, III), numbers, math formulas, and §§N§§ placeholders. Translate EVERYTHING else. Output ONLY the Hindi translation — no explanations.`,
-    generationConfig: { temperature: 0.0 },
+    generationConfig: { temperature: 0.0, ...(IS_THINKING_MODEL ? { thinkingConfig: { thinkingBudget: 0 } } : {}) },
   });
   const result = await Promise.race([
     model.generateContent(`Translate to Hindi:\n${safeText}`),
