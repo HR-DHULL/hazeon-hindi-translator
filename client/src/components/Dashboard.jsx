@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import SideBySidePreview from './SideBySidePreview';
 
-function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
+function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch, isAdmin }) {
   const [deleting, setDeleting] = useState(null);
   const [cancellingId, setCancellingId] = useState(null);
   const [previewJob, setPreviewJob] = useState(null);
@@ -232,6 +232,12 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch }) {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-slate-800 truncate">{job.originalName}</p>
                     <div className="flex items-center gap-1.5 mt-0.5 text-xs text-slate-400">
+                      {isAdmin && (job.userName || job.userEmail) && (
+                        <>
+                          <span className="text-indigo-500 font-medium">{job.userName || job.userEmail}</span>
+                          <span>·</span>
+                        </>
+                      )}
                       <Clock size={10} />
                       <span>{formatDate(job.createdAt)}</span>
                       {job.pageCount && <><span>·</span><span>{job.pageCount}p</span></>}

@@ -29,11 +29,44 @@ export async function dbGetJob(id) {
 }
 
 export async function dbGetAllJobs(userId = null) {
-  let query = supabase.from('jobs').select('*').order('created_at', { ascending: false });
-  if (userId) query = query.eq('user_id', userId);
-  const { data, error } = await query;
+  if (userId) {
+    // Regular user — fetch only their jobs
+    const { data, error } = await supabase
+      .from('jobs').select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return (data || []).map(rowToJob);
+  }
+  // Admin — fetch all jobs + user info
+  const { data: jobRows, error } = await supabase
+    .from('jobs').select('*')
+    .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data || []).map(rowToJob);
+
+  // Fetch user profiles to map user_id → name/email
+  const userIds = [...new Set((jobRows || []).map(j => j.user_id).filter(Boolean))];
+  let userMap = {};
+  if (userIds.length > 0) {
+    try {
+      const { data: profiles } = await supabase
+        .from('user_profiles').select('id, full_name, email')
+        .in('id', userIds);
+      for (const p of (profiles || [])) {
+        userMap[p.id] = { name: p.full_name || '', email: p.email || '' };
+      }
+    } catch {}
+  }
+
+  return (jobRows || []).map(row => {
+    const job = rowToJob(row);
+    const user = userMap[row.user_id];
+    if (user) {
+      job.userName = user.name;
+      job.userEmail = user.email;
+    }
+    return job;
+  });
 }
 
 export async function dbCreateJob(job) {

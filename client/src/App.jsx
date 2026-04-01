@@ -176,7 +176,7 @@ function AppShell() {
             />
           )}
           {view === 'glossary'  && <GlossaryManager />}
-          {view === 'dashboard' && <Dashboard jobs={jobs} onNewTranslation={handleNewTranslation} onRefresh={loadJobs} authFetch={authFetch} />}
+          {view === 'dashboard' && <Dashboard jobs={jobs} onNewTranslation={handleNewTranslation} onRefresh={loadJobs} authFetch={authFetch} isAdmin={isAdmin} />}
           {view === 'admin' && <AdminUsers />}
         </div>
       </main>
