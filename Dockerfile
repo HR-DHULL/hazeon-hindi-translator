@@ -15,7 +15,6 @@ RUN cd client && npm run build
 
 # Copy server code
 COPY server/ ./server/
-COPY api/ ./api/
 
 # Ensure uploads dir exists at runtime
 RUN mkdir -p uploads/output
