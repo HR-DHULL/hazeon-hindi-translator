@@ -130,11 +130,28 @@ function protectExamTags(text) {
 
 function restoreExamTags(text, tags) {
   if (tags.length === 0) return text;
-  // Robust regex: handles spaces Gemini may insert around the placeholder
-  let result = text.replace(/§\s*§\s*(\d+)\s*§\s*§/g, (_, idx) => tags[parseInt(idx, 10)] ?? '');
+  // Instead of placing exam tags back inline (which breaks sentence flow),
+  // collect them and append on a new line after the text.
+  const usedTags = [];
+  let result = text.replace(/§\s*§\s*(\d+)\s*§\s*§/g, (_, idx) => {
+    const tag = tags[parseInt(idx, 10)];
+    if (tag) usedTags.push(tag);
+    return ''; // remove placeholder from inline position
+  });
   // Fallback: single § variant (Gemini sometimes drops one §)
   if (/§\s*\d+\s*§/.test(result) && !/§§/.test(result)) {
-    result = result.replace(/§\s*(\d+)\s*§/g, (_, idx) => tags[parseInt(idx, 10)] ?? '');
+    result = result.replace(/§\s*(\d+)\s*§/g, (_, idx) => {
+      const tag = tags[parseInt(idx, 10)];
+      if (tag) usedTags.push(tag);
+      return '';
+    });
+  }
+  // Clean up residual whitespace/punctuation from removed placeholders
+  result = result.replace(/\s*[–—-]\s*$/g, ''); // trailing dashes left after tag removal
+  result = result.replace(/\s{2,}/g, ' ').trim();
+  // Append exam tags on a new line
+  if (usedTags.length > 0) {
+    result = result + '\n' + usedTags.join(' ');
   }
   return result;
 }
