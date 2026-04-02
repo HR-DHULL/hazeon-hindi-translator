@@ -130,6 +130,19 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
           const spaceAttr = tAttrs.includes('xml:space')
             ? tAttrs
             : ` xml:space="preserve"${tAttrs}`;
+          // Handle newlines in translated text — convert \n to <w:br/> in DOCX
+          if (translatedLine.includes('\n')) {
+            const lines = translatedLine.split('\n');
+            const xmlParts = lines.map((line, li) => {
+              const escaped = escapeXml(line);
+              if (li === 0) return `<w:t${spaceAttr}>${escaped}</w:t>`;
+              return `<w:br/><w:t${spaceAttr}>${escaped}</w:t>`;
+            });
+            return rBlock.replace(
+              /<w:t[^>]*>[^<]*<\/w:t>/,
+              xmlParts.join('')
+            );
+          }
           return rBlock.replace(
             /<w:t[^>]*>[^<]*<\/w:t>/,
             `<w:t${spaceAttr}>${escapeXml(translatedLine)}</w:t>`

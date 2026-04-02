@@ -309,11 +309,76 @@ export async function translateAllChunks(chunks, onProgress, bookContext = '') {
  *
  * Standalone exam citation paragraphs (e.g. "UPPSC 2015") are preserved as-is.
  */
+/**
+ * Pre-process paragraphs to separate answer lines merged with option text.
+ * In many UPSC PDFs, option (d) and "Answer: (b)" share the same paragraph:
+ *   "(d) 1, 2 and 3   Answer: (b)"
+ * This causes Gemini to lose the option text. We split them so each translates properly.
+ * Also handles standalone answer lines like "Answer: (b)" — these should not be translated.
+ * Returns { processed, answerMap } where answerMap tracks which paragraphs had answers extracted.
+ */
+function separateAnswerLines(paragraphs) {
+  // Matches: "Answer: (b)", "Ans: (d)", "Ans. (a)", "Answer (c)", "Answer:(b)"
+  // Also Hindi variants already present: "उत्तर: (b)", "उत्तर (d)"
+  const ANSWER_SUFFIX = /\s+(Answer|Ans\.?|उत्तर)\s*:?\s*\(?([a-dA-D])\)?\s*$/i;
+  // Standalone answer line: entire paragraph is just "Answer: (b)" or "Ans. (d)"
+  const STANDALONE_ANSWER = /^\s*(Answer|Ans\.?)\s*:?\s*\(?([a-dA-D])\)?\s*$/i;
+
+  const processed = [];
+  const answerMap = new Map(); // index → extracted answer string
+
+  for (let i = 0; i < paragraphs.length; i++) {
+    const p = paragraphs[i];
+
+    // Case 1: Standalone answer line — convert to Hindi, don't send to Gemini
+    if (STANDALONE_ANSWER.test(p.trim())) {
+      const m = p.trim().match(STANDALONE_ANSWER);
+      processed.push(''); // empty → won't be translated
+      answerMap.set(i, `उत्तर: (${m[2].toLowerCase()})`);
+      continue;
+    }
+
+    // Case 2: Option + answer merged on same paragraph
+    const match = p.match(ANSWER_SUFFIX);
+    if (match && /^\s*\([a-d]\)\s+/i.test(p)) {
+      const optionText = p.slice(0, match.index).trim();
+      const answerLetter = match[2].toLowerCase();
+      processed.push(optionText);
+      answerMap.set(i, `उत्तर: (${answerLetter})`);
+    } else {
+      processed.push(p);
+    }
+  }
+
+  return { processed, answerMap };
+}
+
+/**
+ * Post-process: re-attach answer lines that were separated before translation.
+ */
+function reattachAnswerLines(translated, answerMap) {
+  if (answerMap.size === 0) return translated;
+  const result = [...translated];
+  for (const [idx, answerText] of answerMap) {
+    // Translate "Answer"/"Ans" to "उत्तर" if still in English
+    const hindiAnswer = answerText
+      .replace(/^(Answer|Ans\.?)\s*:?\s*/i, 'उत्तर: ');
+    result[idx] = (result[idx] || '') + '\n' + hindiAnswer;
+  }
+  return result;
+}
+
 export async function translateParagraphs(paragraphs, bookContext = '', onProgress) {
+  // Pre-process: separate answer lines merged with option (d) text
+  const { processed: cleanedParagraphs, answerMap } = separateAnswerLines(paragraphs);
+  if (answerMap.size > 0) {
+    console.log(`  Separated ${answerMap.size} answer line(s) merged with option text`);
+  }
+
   // Identify exam citation paragraphs that should NOT be translated
   const examCitationIndices = new Set();
-  for (let i = 0; i < paragraphs.length; i++) {
-    if (isStandaloneExamCitation(paragraphs[i])) {
+  for (let i = 0; i < cleanedParagraphs.length; i++) {
+    if (isStandaloneExamCitation(cleanedParagraphs[i])) {
       examCitationIndices.add(i);
     }
   }
@@ -322,16 +387,16 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
   }
 
   // Build filtered list for translation (replace exam citations with empty strings)
-  const toTranslate = paragraphs.map((p, i) => examCitationIndices.has(i) ? '' : p);
+  const toTranslate = cleanedParagraphs.map((p, i) => examCitationIndices.has(i) ? '' : p);
 
   const translated = await translateParagraphsBatched(toTranslate, onProgress);
 
   // Restore exam citations in their original positions
   for (const idx of examCitationIndices) {
-    translated[idx] = paragraphs[idx];
+    translated[idx] = cleanedParagraphs[idx];
   }
 
-  const verified  = await verifyAndFixTranslations(paragraphs, translated, onProgress, examCitationIndices);
+  const verified  = await verifyAndFixTranslations(cleanedParagraphs, translated, onProgress, examCitationIndices);
 
   // Final safety: strip any §§N§§ placeholders and <<<PN>>> markers that survived the pipeline
   const sanitized = verified.map(p => {
@@ -340,7 +405,9 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
     clean = clean.replace(/<<<P?\d+>>>/g, '');
     return clean;
   });
-  return fixMissingMCQLabels(sanitized);
+  const withLabels = fixMissingMCQLabels(sanitized);
+  // Post-process: re-attach answer lines that were separated before translation
+  return reattachAnswerLines(withLabels, answerMap);
 }
 
 // ── Gemini paragraph translation (batched, parallel, with translation memory) ─

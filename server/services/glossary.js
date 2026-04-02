@@ -904,6 +904,28 @@ function fixAnswerFormat(text) {
 }
 
 /**
+ * Format explanation/answer blocks by adding line breaks between statement analyses.
+ * Turns "कथन 1 सही है... कथन 2 गलत है..." into separate lines for readability.
+ */
+function formatExplanationBreaks(text) {
+  if (!text) return text;
+  // Only apply to long paragraphs that look like explanations (multiple statement refs)
+  const stmtCount = (text.match(/(?:कथन|Statement|विकल्प|Pair|युग्म)\s*\d/gi) || []).length;
+  if (stmtCount < 2) return text;
+
+  let result = text;
+  // Add line break before "कथन 2", "कथन 3", etc. (Hindi) — but not "कथन 1" at start
+  result = result.replace(/(?<!\n)\s+(कथन\s+(?:[2-9]|[1-9]\d))/g, '\n$1');
+  // Add line break before "Statement 2", "Statement 3", etc. (English leftovers)
+  result = result.replace(/(?<!\n)\s+(Statement\s+(?:[2-9]|[1-9]\d))/gi, '\n$1');
+  // Add line break before "विकल्प 2", "विकल्प 3" (option analysis)
+  result = result.replace(/(?<!\n)\s+(विकल्प\s+(?:[2-9]|[1-9]\d))/g, '\n$1');
+  // Add line break before "युग्म 2" / "Pair 2" (match-the-following explanations)
+  result = result.replace(/(?<!\n)\s+((?:युग्म|Pair)\s+(?:[2-9]|[1-9]\d))/gi, '\n$1');
+  return result;
+}
+
+/**
  * Fix corrupted MCQ option labels.
  * Claude sometimes translates (a)/(b)/(c)/(d) into Hindi transliterations
  * like «एमसीक्यू1», "MCQ0", "MCQ1", etc. This restores them.
@@ -1139,6 +1161,10 @@ export function applyHindiCorrections(hindiText) {
 
   // Fix broken answer format: "उत्तर: c)" → "उत्तर: (c)"
   result = fixAnswerFormat(result);
+
+  // Format explanation blocks: add line breaks before "कथन 2", "कथन 3", "Statement 2", etc.
+  // so explanations don't appear as a wall of text in the DOCX output
+  result = formatExplanationBreaks(result);
 
   // Fix single English letter transliterations (ए→A, बी→B, etc.)
   result = fixLetterTransliteration(result);
