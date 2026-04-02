@@ -110,13 +110,21 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
       let maxNonBoldLen = 0;
       let maxOverallLen = 0;
       let maxOverallIdx = 0;
+      let hasBoldRuns = false;
+      let hasNonBoldRuns = false;
 
       for (let i = 0; i < runs.length; i++) {
         const len = runs[i].text.trim().length;
+        if (runs[i].isBold) hasBoldRuns = true; else hasNonBoldRuns = true;
         if (len > maxOverallLen) { maxOverallLen = len; maxOverallIdx = i; }
         if (!runs[i].isBold && len > maxNonBoldLen) { maxNonBoldLen = len; targetIdx = i; }
       }
       if (targetIdx === -1) targetIdx = maxOverallIdx;
+      // If we fell back to a bold run but no non-bold runs exist,
+      // strip bold from the target run so translated body text isn't falsely bold.
+      // Exception: keep bold for short headings/labels (under 50 chars).
+      const stripBold = !hasNonBoldRuns && runs[targetIdx]?.isBold
+        && translatedLine && translatedLine.length > 50;
 
       // Replace: put translated text in targetIdx run, empty all others
       let runCount = 0;
@@ -126,6 +134,13 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
 
         const thisIdx = runCount++;
         if (thisIdx === targetIdx) {
+          let runXml = rBlock;
+          // Strip bold from long body text that inherited bold from label formatting
+          if (stripBold) {
+            runXml = runXml.replace(/<w:b\/>/g, '');
+            runXml = runXml.replace(/<w:b\s[^>]*\/>/g, '');
+            runXml = runXml.replace(/<w:b><\/w:b>/g, '');
+          }
           const tAttrs = tMatch[1];
           const spaceAttr = tAttrs.includes('xml:space')
             ? tAttrs
@@ -138,12 +153,12 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
               if (li === 0) return `<w:t${spaceAttr}>${escaped}</w:t>`;
               return `<w:br/><w:t${spaceAttr}>${escaped}</w:t>`;
             });
-            return rBlock.replace(
+            return runXml.replace(
               /<w:t[^>]*>[^<]*<\/w:t>/,
               xmlParts.join('')
             );
           }
-          return rBlock.replace(
+          return runXml.replace(
             /<w:t[^>]*>[^<]*<\/w:t>/,
             `<w:t${spaceAttr}>${escapeXml(translatedLine)}</w:t>`
           );
