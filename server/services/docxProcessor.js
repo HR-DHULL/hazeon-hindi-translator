@@ -30,11 +30,12 @@ export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, out
     zip.file('word/document.xml', modifiedXml, { compression: 'DEFLATE' });
   }
 
-  // Generate output — JSZip re-uses original compressed data for untouched files
+  // Generate output — do NOT set global compression options here.
+  // JSZip re-uses original compressed data for untouched files only when
+  // no top-level compression override is set. Forcing DEFLATE on all entries
+  // can corrupt DOCX structure (Content_Types, rels, etc.)
   const outputBuffer = await zip.generateAsync({
     type: 'nodebuffer',
-    compression: 'DEFLATE',
-    compressionOptions: { level: 1 },
   });
   fs.writeFileSync(outputPath, outputBuffer);
 
@@ -79,7 +80,12 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
         return rBlock;
       });
 
-      const originalText = runs.map(r => r.text).join('').trim();
+      const rawText = runs.map(r => r.text).join('').trim();
+      // Apply the same normalization as extractParagraphTexts to keep paragraph
+      // indices in sync. Without this, paragraphs containing only zero-width
+      // spaces or special chars get counted here but skipped during extraction,
+      // shifting all subsequent translated texts to the wrong paragraphs.
+      const originalText = normalizeSpecialChars(unescapeXml(rawText));
 
       // Skip paragraphs with no text
       if (!originalText) return pBlock;
@@ -287,6 +293,10 @@ function escapeXml(str) {
   // " and ' do NOT need escaping in text content (only in attribute values).
   // Escaping " causes HTML entities to double-encode → visible &quot; in Word.
   return str
+    // Strip XML-invalid control characters (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F)
+    // These are forbidden in XML 1.0 and corrupt the DOCX if present in Gemini output
+    // Keep 0x09 (tab), 0x0A (LF), 0x0D (CR) as they are valid
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
