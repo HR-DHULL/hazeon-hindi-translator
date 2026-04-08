@@ -62,8 +62,11 @@ function runIsBold(runXml) {
 function replaceParagraphTexts(xml, translatedParagraphs) {
   let paraIndex = 0;
 
+  // Negative lookahead (?!<w:p[\s>]) ensures we only match INNERMOST paragraphs.
+  // Without this, text boxes (mc:AlternateContent/w:txbxContent) that nest <w:p>
+  // inside <w:p> cause the lazy regex to match wrong pairs, corrupting the XML.
   const modified = xml.replace(
-    /<w:p[\s>][\s\S]*?<\/w:p>/g,
+    /<w:p[\s>](?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g,
     (pBlock) => {
       // Collect all <w:r> runs that contain a <w:t> element
       const runs = [];
@@ -197,7 +200,7 @@ function unescapeXml(str) {
  */
 export function extractParagraphTexts(xml) {
   const paragraphs = [];
-  xml.replace(/<w:p[\s>][\s\S]*?<\/w:p>/g, (pBlock) => {
+  xml.replace(/<w:p[\s>](?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g, (pBlock) => {
     const textParts = [];
     pBlock.replace(/<w:t[^>]*>([^<]*)<\/w:t>/g, (_, text) => {
       textParts.push(text);
@@ -236,7 +239,7 @@ export function extractDocumentStats(xml) {
   let paraIdx = 0;
 
   // Split XML by significant tags to track context
-  const tokens = xml.split(/(<\/?w:tbl[\s>][^>]*>|<w:p[\s>][\s\S]*?<\/w:p>)/g);
+  const tokens = xml.split(/(<\/?w:tbl[\s>][^>]*>|<w:p[\s>](?:(?!<w:p[\s>])[\s\S])*?<\/w:p>)/g);
   for (const token of tokens) {
     if (/<w:tbl[\s>]/.test(token)) {
       inTable = true;
