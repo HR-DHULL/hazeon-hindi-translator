@@ -37,20 +37,25 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
   const [cancelErr, setCancelErr]     = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const [cloudUploadStatus, setCloudUploadStatus] = useState(''); // '', 'uploading', 'done', 'failed'
+  // Track the cloud URL locally so downloads use it immediately after relay,
+  // without waiting for the next poll to update the job prop.
+  const [relayCloudUrl, setRelayCloudUrl] = useState('');
 
   const previewUrl = job.outputFiles?.find(f => f.format === 'preview')?.url;
   const docxFile = job.outputFiles?.find(f => f.format === 'docx');
-  const hasCloudUrl = !!docxFile?.url;
+  const hasCloudUrl = !!(docxFile?.url || relayCloudUrl);
 
   // Client-side relay: when job completes without a cloud URL, download from
-  // server and re-upload to Supabase Storage via signed URL (browser → Supabase
-  // works reliably, unlike Render → Supabase which hangs on large files).
+  // server and re-upload to Supabase Storage via signed URL (browser -> Supabase
+  // works reliably, unlike Render -> Supabase which hangs on large files).
   const relayAttemptedRef = React.useRef(false);
+  // Expose a promise so handleDownload can wait for the relay to finish
+  const relayPromiseRef = React.useRef(null);
   React.useEffect(() => {
     if (!isComplete || hasCloudUrl || relayAttemptedRef.current || !job.id) return;
     relayAttemptedRef.current = true;
 
-    (async () => {
+    const relayTask = (async () => {
       try {
         setCloudUploadStatus('uploading');
 
@@ -64,7 +69,7 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
         if (!dlRes.ok) throw new Error('Failed to download file');
         const blob = await dlRes.blob();
 
-        // 3. Upload blob to Supabase via signed URL (browser → Supabase = fast & reliable)
+        // 3. Upload blob to Supabase via signed URL (browser -> Supabase = fast & reliable)
         const uploadRes = await fetch(signedUrl, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
@@ -79,13 +84,17 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
           body: JSON.stringify({ url: publicUrl }),
         });
 
+        setRelayCloudUrl(publicUrl);
         setCloudUploadStatus('done');
         console.log('Cloud upload complete:', publicUrl);
+        return publicUrl;
       } catch (err) {
-        console.warn('Cloud relay upload failed (download still works):', err.message);
+        console.warn('Cloud relay upload failed:', err.message);
         setCloudUploadStatus('failed');
+        return null;
       }
     })();
+    relayPromiseRef.current = relayTask;
   }, [isComplete, hasCloudUrl, job.id, authFetch]);
 
   const handleCancel = async () => {
@@ -109,13 +118,27 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
   const handleDownload = async () => {
     const file = job.outputFiles?.find((f) => f.format === 'docx');
 
-    // If cloud URL exists, open directly (no auth needed for public Supabase URLs)
-    if (file?.url) {
-      window.open(file.url, '_blank');
+    // Use cloud URL if available (from job prop or from relay upload)
+    const cloudUrl = file?.url || relayCloudUrl;
+    if (cloudUrl) {
+      window.open(cloudUrl, '_blank');
       return;
     }
 
-    // Otherwise download from server with auth token, then trigger save
+    // If relay upload is still in progress, wait for it instead of hitting server twice
+    if (relayPromiseRef.current && cloudUploadStatus === 'uploading') {
+      setDownloading(true);
+      try {
+        const url = await relayPromiseRef.current;
+        if (url) {
+          window.open(url, '_blank');
+          return;
+        }
+        // Relay failed, fall through to local download
+      } catch {}
+    }
+
+    // Download from server with auth token
     setDownloading(true);
     try {
       const res = await authFetch(`/api/translate/download/${job.id}`);
@@ -131,7 +154,7 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
       URL.revokeObjectURL(blobUrl);
     } catch (err) {
       console.error('Download error:', err);
-      alert('Download failed. Please try again.');
+      alert('Download failed. The file may have expired after a server restart. Please re-translate the document.');
     } finally {
       setDownloading(false);
     }
