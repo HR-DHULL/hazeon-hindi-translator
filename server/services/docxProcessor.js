@@ -155,10 +155,6 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
           const spaceAttr = tAttrs.includes('xml:space')
             ? tAttrs
             : ` xml:space="preserve"${tAttrs}`;
-          // Inject Devanagari font if translated text contains Hindi characters
-          if (hasDevanagari(translatedLine)) {
-            runXml = injectHindiFont(runXml);
-          }
           // Handle newlines in translated text — convert \n to <w:br/> in DOCX
           if (translatedLine.includes('\n')) {
             const lines = translatedLine.split('\n');
