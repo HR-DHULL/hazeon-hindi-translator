@@ -121,11 +121,12 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
     // Use cloud URL if available (from job prop or from relay upload)
     const cloudUrl = file?.url || relayCloudUrl;
     if (cloudUrl) {
+      // Direct link - open in new tab (no spinner needed)
       window.open(cloudUrl, '_blank');
       return;
     }
 
-    // If relay upload is still in progress, wait for it instead of hitting server twice
+    // If relay upload is still in progress, wait for it
     if (relayPromiseRef.current && cloudUploadStatus === 'uploading') {
       setDownloading(true);
       try {
@@ -134,11 +135,13 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
           window.open(url, '_blank');
           return;
         }
-        // Relay failed, fall through to local download
-      } catch {}
+      } catch {} finally {
+        setDownloading(false);
+      }
+      // Relay failed, fall through to local download
     }
 
-    // Download from server with auth token
+    // Download from server with auth token (fallback when no cloud URL)
     setDownloading(true);
     try {
       const res = await authFetch(`/api/translate/download/${job.id}`);
