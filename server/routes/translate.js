@@ -36,6 +36,10 @@ const router = express.Router();
 // Render free tier has ~512MB RAM, so 3 is safe. Extra files queue in the frontend.
 const MAX_CONCURRENT_JOBS = 3;
 
+// In-memory AbortControllers for active translation jobs.
+// Used to actually stop a running translation when the user cancels.
+const activeJobControllers = new Map();
+
 // Rate limit uploads: max 15 per 10 minutes per IP (batch upload support)
 const uploadLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
@@ -132,6 +136,8 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
 
   try { await dbCreateJob(job); } catch (err) {
     console.error('Failed to save job to DB:', err.message);
+    fs.unlink(req.file.path, () => {});
+    return res.status(500).json({ error: 'Failed to create job. Please try again.' });
   }
 
   if (process.env.NETLIFY || (IS_PROD && process.env.URL)) {
@@ -167,11 +173,15 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
   } else {
     // ── Local / Render: respond immediately, run translation in background ────
     res.json({ jobId, message: 'Translation started', originalName });
-    processTranslation(jobId, req.file.path, baseName, bookContext, req.user.id, req.user.role, OUTPUT_DIR)
+    const ac = new AbortController();
+    activeJobControllers.set(jobId, ac);
+    processTranslation(jobId, req.file.path, baseName, bookContext, req.user.id, req.user.role, OUTPUT_DIR, ac.signal)
       .catch(async (error) => {
+        if (error.message === 'CANCELLED') return;
         console.error(`Job ${jobId} failed:`, error);
         try { await dbUpdateJob(jobId, { status: 'failed', message: error.message }); } catch {}
-      });
+      })
+      .finally(() => activeJobControllers.delete(jobId));
   }
 });
 
@@ -235,6 +245,9 @@ router.post('/start', requireAuth, async (req, res) => {
 
   const job = await dbGetJob(jobId).catch(() => null);
   if (!job) return res.status(404).json({ error: 'Job not found.' });
+  if (job.userId && job.userId !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Not authorized' });
+  }
 
   const baseName = path.basename(job.originalName, path.extname(job.originalName));
 
@@ -260,15 +273,23 @@ router.post('/start', requireAuth, async (req, res) => {
   } else {
     // Local / Vercel: download from Supabase to /tmp then process
     res.json({ jobId, message: 'Translation started', originalName: job.originalName });
+    const ac = new AbortController();
+    activeJobControllers.set(jobId, ac);
     (async () => {
+      let tmpPath;
       try {
         const { downloadInputFile } = await import('../services/database.js');
-        const tmpPath = path.join('/tmp', `${jobId}_${job.originalName}`);
+        tmpPath = path.join('/tmp', `${jobId}_${job.originalName}`);
         await downloadInputFile(storagePath, tmpPath);
-        await processTranslation(jobId, tmpPath, baseName, job.bookContext, req.user.id, req.user.role, OUTPUT_DIR);
+        await processTranslation(jobId, tmpPath, baseName, job.bookContext, req.user.id, req.user.role, OUTPUT_DIR, ac.signal);
       } catch (error) {
+        if (error.message === 'CANCELLED') return;
         console.error(`Job ${jobId} failed:`, error);
         try { await dbUpdateJob(jobId, { status: 'failed', message: error.message }); } catch {}
+      } finally {
+        activeJobControllers.delete(jobId);
+        // Cleanup downloaded input file
+        if (tmpPath) try { fs.unlinkSync(tmpPath); } catch {}
       }
     })();
   }
@@ -290,6 +311,12 @@ router.post('/cancel/:jobId', requireAuth, async (req, res) => {
       message: 'Translation cancelled by user.',
       progress: job.progress || 0,
     });
+    // Abort the in-memory translation pipeline immediately (Render/local)
+    const ac = activeJobControllers.get(req.params.jobId);
+    if (ac) {
+      ac.abort();
+      activeJobControllers.delete(req.params.jobId);
+    }
     res.json({ message: 'Translation cancelled' });
   } catch {
     res.status(404).json({ error: 'Job not found' });

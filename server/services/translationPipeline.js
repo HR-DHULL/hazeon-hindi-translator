@@ -18,7 +18,12 @@ import {
 // import { scoreDocument } from './qualityScore.js';
 import { applyCustomGlossary } from './glossary.js';
 
-export async function processTranslation(jobId, filePath, baseName, bookContext, userId, userRole, outputDir) {
+export async function processTranslation(jobId, filePath, baseName, bookContext, userId, userRole, outputDir, abortSignal) {
+  // Helper: check if job was cancelled via AbortController signal or DB status
+  const checkCancelled = () => {
+    if (abortSignal?.aborted) throw new Error('CANCELLED');
+  };
+
   const emit = async (updates) => {
     try {
       // 10s timeout on DB updates to prevent hanging
@@ -118,6 +123,8 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
       }
     } catch { /* non-fatal */ }
 
+    checkCancelled(); // Check before starting translation
+
     const translatedParagraphs = await translateParagraphs(paragraphs, bookContext, async (progress) => {
       const overallPercent = 15 + Math.round((progress.percent / 100) * 70);
       await emit({
@@ -126,7 +133,8 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
         currentChunk: progress.chunk,
         totalChunks: progress.totalChunks,
       });
-      // Check if user cancelled the job
+      // Check if user cancelled the job (abort signal is instant, DB check is fallback)
+      checkCancelled();
       try {
         const current = await dbGetJob(jobId);
         if (current?.status === 'cancelled') throw new Error('CANCELLED');
@@ -145,6 +153,7 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
       }
     }
 
+    checkCancelled(); // Check before DOCX generation
     await emit({ progress: 85, message: 'Translation complete. Generating DOCX...' });
 
     // Step 3: Generate DOCX
@@ -159,6 +168,9 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     const outputFiles = [{ format: 'docx', name: docxFilename, path: docxPath }];
 
     console.log(`  DOCX generated. Marking job complete...`);
+
+    // Final cancel check: don't overwrite "cancelled" status with "completed"
+    checkCancelled();
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -187,9 +199,10 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     }, cleanupDelay);
 
   } catch (error) {
+    // Always clean up temp input file on any error
+    try { fs.unlinkSync(filePath); } catch {}
     if (error.message === 'CANCELLED') {
-      // Job already marked cancelled in DB — just clean up temp files
-      try { fs.unlinkSync(filePath); } catch {}
+      // Job already marked cancelled in DB
       return;
     }
     await emit({ status: 'failed', message: `Translation failed: ${error.message}` });
