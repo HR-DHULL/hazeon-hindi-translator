@@ -30,12 +30,11 @@ export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, out
     zip.file('word/document.xml', modifiedXml, { compression: 'DEFLATE' });
   }
 
-  // Generate output — do NOT set global compression options here.
-  // JSZip re-uses original compressed data for untouched files only when
-  // no top-level compression override is set. Forcing DEFLATE on all entries
-  // can corrupt DOCX structure (Content_Types, rels, etc.)
+  // Generate output — JSZip re-uses original compressed data for untouched files
   const outputBuffer = await zip.generateAsync({
     type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 1 },
   });
   fs.writeFileSync(outputPath, outputBuffer);
 
@@ -61,13 +60,9 @@ function runIsBold(runXml) {
  * number label "Q.1" happened to be the longest run.
  */
 function replaceParagraphTexts(xml, translatedParagraphs) {
-  // Mask containers that nest <w:p> inside <w:p> (text boxes, alt content, SDTs).
-  // Without this, the lazy regex matches outer-open to inner-close, corrupting XML.
-  const { masked, masks } = maskNestedContainers(xml);
-
   let paraIndex = 0;
 
-  const modified = masked.replace(
+  const modified = xml.replace(
     /<w:p[\s>][\s\S]*?<\/w:p>/g,
     (pBlock) => {
       // Collect all <w:r> runs that contain a <w:t> element
@@ -84,12 +79,7 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
         return rBlock;
       });
 
-      const rawText = runs.map(r => r.text).join('').trim();
-      // Apply the same normalization as extractParagraphTexts to keep paragraph
-      // indices in sync. Without this, paragraphs containing only zero-width
-      // spaces or special chars get counted here but skipped during extraction,
-      // shifting all subsequent translated texts to the wrong paragraphs.
-      const originalText = normalizeSpecialChars(unescapeXml(rawText));
+      const originalText = runs.map(r => r.text).join('').trim();
 
       // Skip paragraphs with no text
       if (!originalText) return pBlock;
@@ -180,8 +170,7 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
     }
   );
 
-  // Restore masked containers back into the XML
-  return unmaskContainers(modified, masks);
+  return modified;
 }
 
 /**
@@ -207,10 +196,8 @@ function unescapeXml(str) {
  * XML entities are unescaped to plain text for translation.
  */
 export function extractParagraphTexts(xml) {
-  // Mask nested containers so the regex doesn't break on nested <w:p>
-  const { masked } = maskNestedContainers(xml);
   const paragraphs = [];
-  masked.replace(/<w:p[\s>][\s\S]*?<\/w:p>/g, (pBlock) => {
+  xml.replace(/<w:p[\s>][\s\S]*?<\/w:p>/g, (pBlock) => {
     const textParts = [];
     pBlock.replace(/<w:t[^>]*>([^<]*)<\/w:t>/g, (_, text) => {
       textParts.push(text);
@@ -230,25 +217,26 @@ export function extractParagraphTexts(xml) {
  * Counts tables, images, and maps paragraph indices to context (table/body).
  */
 export function extractDocumentStats(xml) {
-  // Count tables and images from the ORIGINAL xml (before masking)
-  // since drawings/images live inside the containers we mask
   let tableCount = 0;
   let imageCount = 0;
   const paragraphMeta = []; // parallel to extractParagraphTexts output
 
+  // Count tables
   const tableMatches = xml.match(/<w:tbl[\s>]/g);
   tableCount = tableMatches ? tableMatches.length : 0;
 
+  // Count images (drawings + VML pictures)
   const drawingMatches = xml.match(/<w:drawing[\s>]/g);
   const pictMatches = xml.match(/<w:pict[\s>]/g);
   imageCount = (drawingMatches ? drawingMatches.length : 0) + (pictMatches ? pictMatches.length : 0);
 
-  // Use masked XML for paragraph tracking (same masking as extract/replace)
-  const { masked } = maskNestedContainers(xml);
+  // Track which paragraphs are inside tables and which have images
+  // Build a simple context map by scanning the XML linearly
   let inTable = false;
   let paraIdx = 0;
 
-  const tokens = masked.split(/(<\/?w:tbl[\s>][^>]*>|<w:p[\s>][\s\S]*?<\/w:p>)/g);
+  // Split XML by significant tags to track context
+  const tokens = xml.split(/(<\/?w:tbl[\s>][^>]*>|<w:p[\s>][\s\S]*?<\/w:p>)/g);
   for (const token of tokens) {
     if (/<w:tbl[\s>]/.test(token)) {
       inTable = true;
@@ -299,107 +287,7 @@ function escapeXml(str) {
   // " and ' do NOT need escaping in text content (only in attribute values).
   // Escaping " causes HTML entities to double-encode → visible &quot; in Word.
   return str
-    // Strip XML-invalid control characters (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F)
-    // These are forbidden in XML 1.0 and corrupt the DOCX if present in Gemini output
-    // Keep 0x09 (tab), 0x0A (LF), 0x0D (CR) as they are valid
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-}
-
-/**
- * Mask XML containers that can nest <w:p> elements inside other <w:p> elements.
- * Without masking, the lazy regex /<w:p[\s>][\s\S]*?<\/w:p>/g matches from the
- * outer <w:p> to the inner </w:p>, leaving the outer </w:p> orphaned and
- * corrupting the XML. Common containers: text boxes, alternate content, SDTs.
- *
- * Returns { masked, masks } where masked is the XML with placeholders and
- * masks is an array of the original content for restoration.
- */
-function maskNestedContainers(xml) {
-  const masks = [];
-  // Order matters: mask outermost containers first.
-  // mc:AlternateContent can contain w:txbxContent inside it.
-  const containers = ['mc:AlternateContent', 'w:txbxContent', 'w:sdtContent'];
-
-  let result = xml;
-  for (const tag of containers) {
-    const openTag = `<${tag}`;
-    const closeTag = `</${tag}>`;
-    let processed = '';
-    let pos = 0;
-
-    while (pos < result.length) {
-      const openIdx = result.indexOf(openTag, pos);
-      if (openIdx === -1) {
-        processed += result.slice(pos);
-        break;
-      }
-
-      processed += result.slice(pos, openIdx);
-
-      // Find matching close tag, tracking nesting depth
-      let depth = 1;
-      let searchPos = openIdx + openTag.length;
-      while (depth > 0 && searchPos < result.length) {
-        const nextOpen = result.indexOf(openTag, searchPos);
-        const nextClose = result.indexOf(closeTag, searchPos);
-
-        if (nextClose === -1) { searchPos = result.length; break; }
-
-        if (nextOpen !== -1 && nextOpen < nextClose) {
-          depth++;
-          searchPos = nextOpen + openTag.length;
-        } else {
-          depth--;
-          searchPos = nextClose + closeTag.length;
-        }
-      }
-
-      const block = result.slice(openIdx, searchPos);
-      const maskId = masks.length;
-      masks.push(block);
-      processed += `<!--NMASK_${maskId}-->`;
-      pos = searchPos;
-    }
-
-    result = processed;
-  }
-
-  return { masked: result, masks };
-}
-
-/** Restore masked containers back into the XML. */
-function unmaskContainers(xml, masks) {
-  let result = xml;
-  for (let i = masks.length - 1; i >= 0; i--) {
-    result = result.replace(`<!--NMASK_${i}-->`, masks[i]);
-  }
-  return result;
-}
-
-/** Check if translated text contains Devanagari characters. */
-function hasDevanagari(str) {
-  return /[\u0900-\u097F]/.test(str);
-}
-
-/**
- * Inject a Devanagari-capable font (Mangal) into a <w:r> run's <w:rPr> so
- * Hindi text renders correctly even if the original font is English-only.
- * Uses <w:rFonts w:cs="Mangal" w:hint="cs"/> + <w:cs/> to activate complex script.
- */
-function injectHindiFont(runXml) {
-  const hindiFont = '<w:rFonts w:cs="Mangal" w:hint="cs"/><w:cs/>';
-
-  // If <w:rPr> exists, inject font inside it (avoid duplicating if already present)
-  if (/<w:rPr>/.test(runXml) || /<w:rPr[\s>]/.test(runXml)) {
-    if (/w:cs="Mangal"/.test(runXml)) return runXml; // already has it
-    // Remove any existing w:rFonts to avoid conflict, then add ours
-    let modified = runXml.replace(/<w:rFonts[^>]*\/>/g, '');
-    modified = modified.replace(/<w:rFonts[^>]*>[\s\S]*?<\/w:rFonts>/g, '');
-    return modified.replace(/(<w:rPr[\s>][^>]*>)/, `$1${hindiFont}`);
-  }
-  // No <w:rPr> exists - add one after the opening <w:r> tag
-  return runXml.replace(/(<w:r[\s>][^>]*>)/, `$1<w:rPr>${hindiFont}</w:rPr>`);
 }
