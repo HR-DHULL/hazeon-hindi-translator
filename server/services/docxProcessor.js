@@ -126,34 +126,6 @@ function runIsBold(runXml) {
 }
 
 /**
- * Inject Nirmala UI font into a <w:r> run's <w:rPr> (run properties).
- * If <w:rPr> exists, add/update <w:rFonts> with cs (complex script) for Devanagari.
- * If <w:rPr> doesn't exist, create it with the font specification.
- * Also sets w:ascii and w:hAnsi so mixed English+Hindi text uses the same font.
- */
-function injectHindiFontInRun(runXml) {
-  const fontTag = `<w:rFonts w:ascii="${HINDI_FONT}" w:hAnsi="${HINDI_FONT}" w:cs="${HINDI_FONT}"/>`;
-
-  if (/<w:rPr>/.test(runXml)) {
-    // <w:rPr> exists — check if <w:rFonts> is already there
-    if (/<w:rFonts[^>]*>/.test(runXml)) {
-      // Update existing <w:rFonts> — add/replace cs, ascii, hAnsi attributes
-      return runXml.replace(/<w:rFonts([^>]*)(\/?>)/, (match, attrs, suffix) => {
-        attrs = attrs.replace(/\s*w:cs="[^"]*"/g, '');
-        attrs = attrs.replace(/\s*w:ascii="[^"]*"/g, '');
-        attrs = attrs.replace(/\s*w:hAnsi="[^"]*"/g, '');
-        return `<w:rFonts${attrs} w:ascii="${HINDI_FONT}" w:hAnsi="${HINDI_FONT}" w:cs="${HINDI_FONT}"${suffix}`;
-      });
-    }
-    // No <w:rFonts> — insert font tag at the start of <w:rPr>
-    return runXml.replace(/<w:rPr>/, `<w:rPr>${fontTag}`);
-  }
-
-  // No <w:rPr> at all — insert after <w:r> or <w:r ...>
-  return runXml.replace(/(<w:r[\s>][^>]*>)/, `$1<w:rPr>${fontTag}</w:rPr>`);
-}
-
-/**
  * Replace paragraph texts in DOCX XML with translated paragraphs (1-to-1 mapping).
  *
  * Works at the <w:r> run level (not just <w:t>) so we can inspect bold formatting.
@@ -236,10 +208,9 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
       const stripBold = !hasNonBoldRuns && runs[targetIdx]?.isBold
         && translatedLine && translatedLine.length > 50;
 
-      // Check if translated text contains Devanagari (Hindi) characters
-      const hasDevanagari = translatedLine && /[\u0900-\u097F]/.test(translatedLine);
-
       // Replace: put translated text in targetIdx run, empty all others
+      // Hindi font (Nirmala UI) is set globally via styles.xml — Word auto-applies
+      // it for Devanagari characters via the w:cs (complex script) font fallback.
       let runCount = 0;
       const newBlock = pBlock.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, (rBlock) => {
         const tMatch = rBlock.match(/<w:t([^>]*)>([^<]*)<\/w:t>/);
@@ -253,10 +224,6 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
             runXml = runXml.replace(/<w:b\/>/g, '');
             runXml = runXml.replace(/<w:b\s[^>]*\/>/g, '');
             runXml = runXml.replace(/<w:b><\/w:b>/g, '');
-          }
-          // Inject Hindi font (Nirmala UI) into run properties for Devanagari text
-          if (hasDevanagari) {
-            runXml = injectHindiFontInRun(runXml);
           }
           const tAttrs = tMatch[1];
           const spaceAttr = tAttrs.includes('xml:space')
