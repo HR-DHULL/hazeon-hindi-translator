@@ -412,9 +412,7 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 
 // ── Gemini paragraph translation (batched, parallel, with translation memory) ─
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  // Reduced from 30 to 20 paragraphs per batch for better accuracy.
-  // Larger batches cause Gemini to get lazy and skip/merge paragraphs.
-  const BATCH_SIZE = 20;
+  const BATCH_SIZE = 30;
   const CONCURRENCY = 5; // Paid API key — run 5 batches in parallel
 
   const translated = new Array(paragraphs.length).fill('');

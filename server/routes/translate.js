@@ -544,4 +544,35 @@ router.delete('/glossary', requireAuth, async (req, res) => {
   }
 });
 
+// ─── POST /api/translate/text ────────────────────────────────────────────────
+// Paste-text mode: translate plain text to Hindi, return translated text directly.
+// No DOCX, no file upload, no page limits.
+
+router.post('/text', requireAuth, async (req, res) => {
+  const { text, bookContext } = req.body || {};
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    return res.status(400).json({ error: 'No text provided' });
+  }
+  // Split by newlines to get paragraphs
+  const paragraphs = text.split(/\n/).map(p => p.trim()).filter(Boolean);
+  if (paragraphs.length === 0) {
+    return res.status(400).json({ error: 'No translatable text found' });
+  }
+  if (paragraphs.length > 2000) {
+    return res.status(400).json({ error: `Too many paragraphs (${paragraphs.length}). Max 2000.` });
+  }
+
+  try {
+    const { translateParagraphs: doTranslate } = await import('../services/translator.js');
+    const translated = await doTranslate(paragraphs, bookContext || '');
+
+    // Build output: join translated paragraphs with newlines
+    const output = translated.map((t, i) => t || paragraphs[i]).join('\n');
+    res.json({ translated: output, paragraphCount: paragraphs.length });
+  } catch (err) {
+    console.error('Text translation failed:', err.message);
+    res.status(500).json({ error: `Translation failed: ${err.message}` });
+  }
+});
+
 export default router;

@@ -10,9 +10,6 @@ import JSZip from 'jszip';
  * @param {string[]} translatedParagraphs - Array of translated texts, one per XML paragraph
  * @param {string} outputPath - Where to save the cloned DOCX
  */
-// Hindi font to use for Devanagari text in translated output
-const HINDI_FONT = 'Nirmala UI';
-
 export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, outputPath) {
   // Copy the original DOCX file first, then replace only document.xml
   // This avoids loading + re-compressing ALL entries (images, fonts, etc.)
@@ -28,17 +25,10 @@ export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, out
     const docXml = await docXmlFile.async('string');
     const modifiedXml = replaceParagraphTexts(docXml, translatedParagraphs);
 
-    // Replace only document.xml — all other entries (images, fonts, styles)
-    // remain as original compressed bytes, never decompressed into memory
+    // Replace ONLY document.xml — all other entries (images, fonts, styles)
+    // remain as original compressed bytes, never decompressed into memory.
+    // DO NOT touch styles.xml — modifying it corrupts the DOCX structure.
     zip.file('word/document.xml', modifiedXml, { compression: 'DEFLATE' });
-  }
-
-  // Inject Hindi font into styles.xml so Devanagari renders correctly
-  const stylesFile = zip.file('word/styles.xml');
-  if (stylesFile) {
-    let stylesXml = await stylesFile.async('string');
-    stylesXml = injectHindiFontInStyles(stylesXml);
-    zip.file('word/styles.xml', stylesXml, { compression: 'DEFLATE' });
   }
 
   // Generate output — JSZip re-uses original compressed data for untouched files
@@ -50,72 +40,6 @@ export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, out
   fs.writeFileSync(outputPath, outputBuffer);
 
   return outputPath;
-}
-
-/**
- * Inject Hindi font (Nirmala UI) into styles.xml default run properties.
- * Sets the complex-script (cs) font for Devanagari rendering.
- * Also sets ascii/hAnsi so mixed English+Hindi text stays consistent.
- */
-function injectHindiFontInStyles(stylesXml) {
-  // Target: <w:docDefaults><w:rPrDefault><w:rPr> section
-  // Add or update <w:rFonts> with cs (complex script) attribute for Hindi
-
-  // Case 1: <w:rFonts> already exists in docDefaults — add/update w:cs attribute
-  if (/<w:docDefaults>[\s\S]*?<w:rFonts[^>]*>/.test(stylesXml)) {
-    stylesXml = stylesXml.replace(
-      /(<w:docDefaults>[\s\S]*?<w:rFonts)([^>]*)(\/?>)/,
-      (match, prefix, attrs, suffix) => {
-        // Remove existing w:cs if present, then add ours
-        attrs = attrs.replace(/\s*w:cs="[^"]*"/g, '');
-        // Also set w:cstheme if present
-        attrs = attrs.replace(/\s*w:cstheme="[^"]*"/g, '');
-        return `${prefix}${attrs} w:cs="${HINDI_FONT}"${suffix}`;
-      }
-    );
-  }
-  // Case 2: <w:rPr> exists in <w:rPrDefault> but no <w:rFonts>
-  else if (/<w:rPrDefault>\s*<w:rPr>/.test(stylesXml)) {
-    stylesXml = stylesXml.replace(
-      /(<w:rPrDefault>\s*<w:rPr>)/,
-      `$1<w:rFonts w:cs="${HINDI_FONT}"/>`
-    );
-  }
-  // Case 3: <w:rPrDefault> exists but empty — inject rPr with rFonts
-  else if (/<w:rPrDefault\s*\/>/.test(stylesXml)) {
-    stylesXml = stylesXml.replace(
-      /<w:rPrDefault\s*\/>/,
-      `<w:rPrDefault><w:rPr><w:rFonts w:cs="${HINDI_FONT}"/></w:rPr></w:rPrDefault>`
-    );
-  }
-  // Case 4: No <w:docDefaults> at all — inject at the beginning of styles
-  else if (!/<w:docDefaults>/.test(stylesXml)) {
-    stylesXml = stylesXml.replace(
-      /(<w:styles[^>]*>)/,
-      `$1<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:cs="${HINDI_FONT}"/></w:rPr></w:rPrDefault></w:docDefaults>`
-    );
-  }
-
-  // Also adjust default paragraph spacing for Hindi text.
-  // Hindi Devanagari glyphs are taller and wider - increase line spacing slightly
-  // to prevent clipping and improve readability. Set to 1.15x (276 twips for 12pt base).
-  // Only add if <w:pPrDefault> doesn't already have custom spacing.
-  if (/<w:pPrDefault>/.test(stylesXml)) {
-    if (!/<w:pPrDefault>[\s\S]*?<w:spacing/.test(stylesXml)) {
-      stylesXml = stylesXml.replace(
-        /(<w:pPrDefault>\s*<w:pPr>)/,
-        `$1<w:spacing w:line="276" w:lineRule="auto"/>`
-      );
-    }
-  } else if (/<w:docDefaults>/.test(stylesXml)) {
-    // Add pPrDefault after rPrDefault
-    stylesXml = stylesXml.replace(
-      /(<\/w:rPrDefault>)/,
-      `$1<w:pPrDefault><w:pPr><w:spacing w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>`
-    );
-  }
-
-  return stylesXml;
 }
 
 /**
