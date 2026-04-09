@@ -25,7 +25,7 @@ const UPSC_BASE_PROMPT = `You are an expert Hindi translator for UPSC/HCS compet
 RULES:
 1. NEVER transliterate. Use proper Hindi: राजकोषीय (fiscal), न्यायपालिका (judiciary), अध्यादेश (ordinance), अधिकरण (tribunal).
 2. Keep abbreviations as-is: UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, PIL, CAG, DNA, pH, AM, PM, WTO, UNESCO, UNICEF, WHO, NDA, BJP, INC, etc.
-3. Use the glossary terms exactly as given — they override your default choices.
+3. GLOSSARY IS MANDATORY: Use the glossary terms EXACTLY as given — they override your default choices. If the glossary says "Tribunal" = "अधिकरण", you MUST use "अधिकरण" every time. Never deviate from glossary mappings.
 4. MCQ labels: (a)(b)(c)(d) stay in English. One option per line. Never drop or merge labels. Use कूट (not कोड), कीजिए (not करें), चुनिए (not चुनें), उपर्युक्त (not उपरोक्त).
 5. Single letters as variables/labels (A, B, C in match-the-following; P, Q, R in puzzles): keep as English. WRONG: ए-3, बी-2 → CORRECT: A-3, B-2.
 6. Roman numerals I, II, III: keep as-is. Never translate I as मैं.
@@ -202,8 +202,8 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
 
   const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each paragraph below from English to Hindi for UPSC/HCS exam material. Each paragraph starts with <<<PN>>> (e.g., <<<P1>>>, <<<P2>>>). Preserve that exact prefix in your output.\n\nCRITICAL: Translate EVERY English word/sentence into Hindi. Do NOT leave ANY complete English sentence or question untranslated. The only allowed English in output: acronyms (UPSC, GDP, RBI...), MCQ labels (a)(b)(c)(d), single-letter variables, numbers, and math formulas.\n\n${numbered}`;
 
-  // 45-second timeout per batch using Promise.race (more reliable than AbortController with Gemini SDK)
-  const timeoutMs = 45000;
+  // 60-second timeout per batch (45s was too tight for larger batches, causing unnecessary fallbacks)
+  const timeoutMs = 60000;
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error(`Gemini batch timed out after ${timeoutMs / 1000}s`)), timeoutMs)
   );
@@ -412,7 +412,9 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 
 // ── Gemini paragraph translation (batched, parallel, with translation memory) ─
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  const BATCH_SIZE = 30;
+  // Reduced from 30 to 20 paragraphs per batch for better accuracy.
+  // Larger batches cause Gemini to get lazy and skip/merge paragraphs.
+  const BATCH_SIZE = 20;
   const CONCURRENCY = 5; // Paid API key — run 5 batches in parallel
 
   const translated = new Array(paragraphs.length).fill('');
@@ -606,8 +608,8 @@ async function verifyAndFixTranslations(originals, translated, onProgress, skipI
     return translated;
   }
 
-  // Cap second-pass retries to limit API cost
-  const MAX_SECOND_PASS = 15;
+  // Cap second-pass retries to limit API cost (raised from 15 to 30 for better coverage)
+  const MAX_SECOND_PASS = 30;
   if (problematic.length > MAX_SECOND_PASS) {
     console.log(`  Two-pass review: capping from ${problematic.length} → ${MAX_SECOND_PASS} paragraphs to limit API cost`);
     problematic.length = MAX_SECOND_PASS;

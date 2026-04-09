@@ -9,9 +9,14 @@
 
 import crypto from 'crypto';
 
+// ── Glossary version — cache entries created with a different version are stale ──
+// Bump this whenever glossary.js or system prompt changes significantly.
+// Format: YYYYMMDD_NN (date + sequence number)
+const GLOSSARY_VERSION = '20260409_01';
+
 // ── In-memory LRU cache ─────────────────────────────────────────────────────
 const MAX_MEMORY_ENTRIES = 5000;
-const memoryCache = new Map();  // key: hash → { translated, ts }
+const memoryCache = new Map();  // key: hash → { translated, ts, version }
 
 function hashText(text) {
   return crypto.createHash('md5').update(text.trim()).digest('hex');
@@ -102,16 +107,17 @@ export async function lookupCache(texts) {
   const dbMissHashes = [];
   const dbMissIndices = [];
 
-  // Layer 1: in-memory
+  // Layer 1: in-memory (reject entries from old glossary versions)
   for (let i = 0; i < texts.length; i++) {
     const text = texts[i]?.trim();
     if (!text) continue;
     const hash = hashText(text);
     const cached = memoryCache.get(hash);
-    if (cached) {
+    if (cached && cached.version === GLOSSARY_VERSION) {
       hits.set(i, cached.translated);
       cached.ts = Date.now(); // refresh LRU timestamp
     } else {
+      if (cached) memoryCache.delete(hash); // evict stale entry
       dbMissHashes.push(hash);
       dbMissIndices.push(i);
     }
@@ -126,8 +132,8 @@ export async function lookupCache(texts) {
       if (translated) {
         const idx = dbMissIndices[j];
         hits.set(idx, translated);
-        // Promote to memory cache
-        memoryCache.set(hash, { translated, ts: Date.now() });
+        // Promote to memory cache with current glossary version
+        memoryCache.set(hash, { translated, ts: Date.now(), version: GLOSSARY_VERSION });
       }
     }
   }
@@ -150,7 +156,7 @@ export async function storeCache(pairs) {
     if (source.trim() === translated.trim()) continue;
 
     const hash = hashText(source);
-    memoryCache.set(hash, { translated, ts: Date.now() });
+    memoryCache.set(hash, { translated, ts: Date.now(), version: GLOSSARY_VERSION });
     dbEntries.push({ hash, source: source.trim(), translated: translated.trim() });
   }
 

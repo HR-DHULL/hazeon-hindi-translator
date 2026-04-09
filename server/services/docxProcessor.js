@@ -10,6 +10,9 @@ import JSZip from 'jszip';
  * @param {string[]} translatedParagraphs - Array of translated texts, one per XML paragraph
  * @param {string} outputPath - Where to save the cloned DOCX
  */
+// Hindi font to use for Devanagari text in translated output
+const HINDI_FONT = 'Nirmala UI';
+
 export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, outputPath) {
   // Copy the original DOCX file first, then replace only document.xml
   // This avoids loading + re-compressing ALL entries (images, fonts, etc.)
@@ -30,6 +33,14 @@ export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, out
     zip.file('word/document.xml', modifiedXml, { compression: 'DEFLATE' });
   }
 
+  // Inject Hindi font into styles.xml so Devanagari renders correctly
+  const stylesFile = zip.file('word/styles.xml');
+  if (stylesFile) {
+    let stylesXml = await stylesFile.async('string');
+    stylesXml = injectHindiFontInStyles(stylesXml);
+    zip.file('word/styles.xml', stylesXml, { compression: 'DEFLATE' });
+  }
+
   // Generate output — JSZip re-uses original compressed data for untouched files
   const outputBuffer = await zip.generateAsync({
     type: 'nodebuffer',
@@ -42,10 +53,104 @@ export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, out
 }
 
 /**
+ * Inject Hindi font (Nirmala UI) into styles.xml default run properties.
+ * Sets the complex-script (cs) font for Devanagari rendering.
+ * Also sets ascii/hAnsi so mixed English+Hindi text stays consistent.
+ */
+function injectHindiFontInStyles(stylesXml) {
+  // Target: <w:docDefaults><w:rPrDefault><w:rPr> section
+  // Add or update <w:rFonts> with cs (complex script) attribute for Hindi
+
+  // Case 1: <w:rFonts> already exists in docDefaults — add/update w:cs attribute
+  if (/<w:docDefaults>[\s\S]*?<w:rFonts[^>]*>/.test(stylesXml)) {
+    stylesXml = stylesXml.replace(
+      /(<w:docDefaults>[\s\S]*?<w:rFonts)([^>]*)(\/?>)/,
+      (match, prefix, attrs, suffix) => {
+        // Remove existing w:cs if present, then add ours
+        attrs = attrs.replace(/\s*w:cs="[^"]*"/g, '');
+        // Also set w:cstheme if present
+        attrs = attrs.replace(/\s*w:cstheme="[^"]*"/g, '');
+        return `${prefix}${attrs} w:cs="${HINDI_FONT}"${suffix}`;
+      }
+    );
+  }
+  // Case 2: <w:rPr> exists in <w:rPrDefault> but no <w:rFonts>
+  else if (/<w:rPrDefault>\s*<w:rPr>/.test(stylesXml)) {
+    stylesXml = stylesXml.replace(
+      /(<w:rPrDefault>\s*<w:rPr>)/,
+      `$1<w:rFonts w:cs="${HINDI_FONT}"/>`
+    );
+  }
+  // Case 3: <w:rPrDefault> exists but empty — inject rPr with rFonts
+  else if (/<w:rPrDefault\s*\/>/.test(stylesXml)) {
+    stylesXml = stylesXml.replace(
+      /<w:rPrDefault\s*\/>/,
+      `<w:rPrDefault><w:rPr><w:rFonts w:cs="${HINDI_FONT}"/></w:rPr></w:rPrDefault>`
+    );
+  }
+  // Case 4: No <w:docDefaults> at all — inject at the beginning of styles
+  else if (!/<w:docDefaults>/.test(stylesXml)) {
+    stylesXml = stylesXml.replace(
+      /(<w:styles[^>]*>)/,
+      `$1<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:cs="${HINDI_FONT}"/></w:rPr></w:rPrDefault></w:docDefaults>`
+    );
+  }
+
+  // Also adjust default paragraph spacing for Hindi text.
+  // Hindi Devanagari glyphs are taller and wider - increase line spacing slightly
+  // to prevent clipping and improve readability. Set to 1.15x (276 twips for 12pt base).
+  // Only add if <w:pPrDefault> doesn't already have custom spacing.
+  if (/<w:pPrDefault>/.test(stylesXml)) {
+    if (!/<w:pPrDefault>[\s\S]*?<w:spacing/.test(stylesXml)) {
+      stylesXml = stylesXml.replace(
+        /(<w:pPrDefault>\s*<w:pPr>)/,
+        `$1<w:spacing w:line="276" w:lineRule="auto"/>`
+      );
+    }
+  } else if (/<w:docDefaults>/.test(stylesXml)) {
+    // Add pPrDefault after rPrDefault
+    stylesXml = stylesXml.replace(
+      /(<\/w:rPrDefault>)/,
+      `$1<w:pPrDefault><w:pPr><w:spacing w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>`
+    );
+  }
+
+  return stylesXml;
+}
+
+/**
  * Check if a <w:r> run element has bold formatting (<w:b/> or <w:b w:val="true"/>).
  */
 function runIsBold(runXml) {
   return /<w:b[\s/>]/.test(runXml) && !/<w:b\s+w:val\s*=\s*"(false|0|off)"/.test(runXml);
+}
+
+/**
+ * Inject Nirmala UI font into a <w:r> run's <w:rPr> (run properties).
+ * If <w:rPr> exists, add/update <w:rFonts> with cs (complex script) for Devanagari.
+ * If <w:rPr> doesn't exist, create it with the font specification.
+ * Also sets w:ascii and w:hAnsi so mixed English+Hindi text uses the same font.
+ */
+function injectHindiFontInRun(runXml) {
+  const fontTag = `<w:rFonts w:ascii="${HINDI_FONT}" w:hAnsi="${HINDI_FONT}" w:cs="${HINDI_FONT}"/>`;
+
+  if (/<w:rPr>/.test(runXml)) {
+    // <w:rPr> exists — check if <w:rFonts> is already there
+    if (/<w:rFonts[^>]*>/.test(runXml)) {
+      // Update existing <w:rFonts> — add/replace cs, ascii, hAnsi attributes
+      return runXml.replace(/<w:rFonts([^>]*)(\/?>)/, (match, attrs, suffix) => {
+        attrs = attrs.replace(/\s*w:cs="[^"]*"/g, '');
+        attrs = attrs.replace(/\s*w:ascii="[^"]*"/g, '');
+        attrs = attrs.replace(/\s*w:hAnsi="[^"]*"/g, '');
+        return `<w:rFonts${attrs} w:ascii="${HINDI_FONT}" w:hAnsi="${HINDI_FONT}" w:cs="${HINDI_FONT}"${suffix}`;
+      });
+    }
+    // No <w:rFonts> — insert font tag at the start of <w:rPr>
+    return runXml.replace(/<w:rPr>/, `<w:rPr>${fontTag}`);
+  }
+
+  // No <w:rPr> at all — insert after <w:r> or <w:r ...>
+  return runXml.replace(/(<w:r[\s>][^>]*>)/, `$1<w:rPr>${fontTag}</w:rPr>`);
 }
 
 /**
@@ -97,6 +202,8 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
       if (translatedLine) {
         translatedLine = translatedLine.replace(/§\s*§?\s*\d+\s*§?\s*§/g, '');
         translatedLine = translatedLine.replace(/<<<P?\d+>>>/g, '');
+        // Strip leading/trailing newlines that can create empty <w:t> elements
+        translatedLine = translatedLine.replace(/^\n+|\n+$/g, '').trim();
       }
 
       // If this paragraph uses Word's automatic list numbering (<w:numPr>), the letter
@@ -129,6 +236,9 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
       const stripBold = !hasNonBoldRuns && runs[targetIdx]?.isBold
         && translatedLine && translatedLine.length > 50;
 
+      // Check if translated text contains Devanagari (Hindi) characters
+      const hasDevanagari = translatedLine && /[\u0900-\u097F]/.test(translatedLine);
+
       // Replace: put translated text in targetIdx run, empty all others
       let runCount = 0;
       const newBlock = pBlock.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, (rBlock) => {
@@ -143,6 +253,10 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
             runXml = runXml.replace(/<w:b\/>/g, '');
             runXml = runXml.replace(/<w:b\s[^>]*\/>/g, '');
             runXml = runXml.replace(/<w:b><\/w:b>/g, '');
+          }
+          // Inject Hindi font (Nirmala UI) into run properties for Devanagari text
+          if (hasDevanagari) {
+            runXml = injectHindiFontInRun(runXml);
           }
           const tAttrs = tMatch[1];
           const spaceAttr = tAttrs.includes('xml:space')
@@ -197,18 +311,28 @@ function unescapeXml(str) {
  * Extract paragraph texts from DOCX XML in order.
  * Only returns paragraphs that have actual text content.
  * XML entities are unescaped to plain text for translation.
+ *
+ * IMPORTANT: Must use the same paragraph-counting logic as replaceParagraphTexts.
+ * Both functions must agree on which paragraphs are "non-empty" so the 1-to-1
+ * index mapping between extracted and translated paragraphs stays in sync.
+ * We collect text ONLY from <w:t> elements inside <w:r> runs (matching replaceParagraphTexts).
  */
 export function extractParagraphTexts(xml) {
   const paragraphs = [];
+  // Use same negative-lookahead regex as replaceParagraphTexts to handle nested <w:p> in text boxes
   xml.replace(/<w:p[\s>](?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g, (pBlock) => {
+    // Collect text only from <w:t> inside <w:r> runs - must match replaceParagraphTexts logic
     const textParts = [];
-    pBlock.replace(/<w:t[^>]*>([^<]*)<\/w:t>/g, (_, text) => {
-      textParts.push(text);
-      return _;
+    pBlock.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, (rBlock) => {
+      const tMatch = rBlock.match(/<w:t[^>]*>([^<]*)<\/w:t>/);
+      if (tMatch) {
+        textParts.push(tMatch[1]);
+      }
+      return rBlock;
     });
-    const fullText = normalizeSpecialChars(unescapeXml(textParts.join('').trim()));
-    if (fullText) {
-      paragraphs.push(fullText);
+    const rawText = textParts.join('').trim();
+    if (rawText) {
+      paragraphs.push(normalizeSpecialChars(unescapeXml(rawText)));
     }
     return pBlock;
   });
@@ -290,6 +414,11 @@ function escapeXml(str) {
   // " and ' do NOT need escaping in text content (only in attribute values).
   // Escaping " causes HTML entities to double-encode → visible &quot; in Word.
   return str
+    // Strip XML 1.0 invalid control characters (U+0000-U+0008, U+000B-U+000C, U+000E-U+001F, U+FFFE-U+FFFF)
+    // These can come from Gemini output and make the DOCX XML invalid, causing "corrupted" errors in Word.
+    // Keep tab (0x09), LF (0x0A), CR (0x0D) as they are valid.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]/g, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
