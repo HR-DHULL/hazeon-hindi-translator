@@ -14,11 +14,10 @@ import {
   dbIncrementPages,
   dbGetGlossary,
 } from './database.js';
-// Quality scoring disabled — adds memory pressure on 512MB Render, causing OOM
-// import { scoreDocument } from './qualityScore.js';
+import { scoreDocument } from './qualityScore.js';
 import { applyCustomGlossary } from './glossary.js';
 
-export async function processTranslation(jobId, filePath, baseName, bookContext, userId, userRole, outputDir) {
+export async function processTranslation(jobId, filePath, baseName, bookContext, userId, userRole, outputDir, subject = null) {
   const emit = async (updates) => {
     try {
       // 10s timeout on DB updates to prevent hanging
@@ -97,6 +96,10 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
       console.log(`  Document structure: ${docStats.tableCount} table(s), ${docStats.imageCount} image(s)`);
     }
 
+    if (subject) {
+      console.log(`  Subject hint provided: "${subject}"`);
+    }
+
     // Step 2: Translate
     const structInfo = [];
     if (docStats.tableCount > 0) structInfo.push(`${docStats.tableCount} table(s)`);
@@ -118,13 +121,23 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
       }
     } catch { /* non-fatal */ }
 
+    const translateStart = Date.now();
+    let translatedCount = 0;
+
     const translatedParagraphs = await translateParagraphs(paragraphs, bookContext, async (progress) => {
+      translatedCount = progress.chunk ? progress.chunk * (progress.totalChunks ? Math.ceil(paragraphs.length / progress.totalChunks) : 1) : translatedCount;
+      const elapsedMs = Date.now() - translateStart;
+      const rate = translatedCount / (elapsedMs / 1000); // paragraphs per second
+      const remaining = paragraphs.length - translatedCount;
+      const etaSeconds = rate > 0 ? Math.ceil(remaining / rate) : null;
+
       const overallPercent = 15 + Math.round((progress.percent / 100) * 70);
       await emit({
         progress: overallPercent,
         message: progress.message,
         currentChunk: progress.chunk,
         totalChunks: progress.totalChunks,
+        eta: etaSeconds,
       });
       // Check if user cancelled the job
       try {
@@ -143,6 +156,24 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
           translatedParagraphs[i] = applyCustomGlossary(translatedParagraphs[i], paragraphs[i], customGlossary);
         }
       }
+    }
+
+    // Step 2.5: Quality scoring (sampled - every 10th paragraph to limit memory)
+    let qualityScore = null;
+    try {
+      const samplePairs = [];
+      for (let i = 0; i < Math.min(paragraphs.length, translatedParagraphs.length); i += 10) {
+        if (paragraphs[i]?.trim() && translatedParagraphs[i]?.trim()) {
+          samplePairs.push({ en: paragraphs[i], hi: translatedParagraphs[i] });
+        }
+      }
+      if (samplePairs.length > 0) {
+        const qResult = scoreDocument(samplePairs);
+        qualityScore = qResult.overall;
+        console.log(`  Quality score: ${qualityScore}/100 (sampled ${samplePairs.length} paragraphs)`);
+      }
+    } catch (e) {
+      console.warn('  Quality scoring failed (non-fatal):', e.message);
     }
 
     await emit({ progress: 85, message: 'Translation complete. Generating DOCX...' });
@@ -167,6 +198,7 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
           progress: 100,
           message: 'Translation completed successfully!',
           outputFiles,
+          qualityScore,
           completedAt: new Date().toISOString(),
         });
         console.log(`  Job ${jobId} marked complete`);

@@ -12,14 +12,39 @@ import crypto from 'crypto';
 // ── Glossary version — cache entries created with a different version are stale ──
 // Bump this whenever glossary.js or system prompt changes significantly.
 // Format: YYYYMMDD_NN (date + sequence number)
-const GLOSSARY_VERSION = '20260409_01';
+const GLOSSARY_VERSION = '20260414_01';
+
+// ── Granular term tracking ──────────────────────────────────────────────────
+// Track which glossary terms appear in each cached source text.
+// When glossary updates, only invalidate entries containing changed terms.
+// This prevents full cache wipes on minor glossary additions.
+const CHANGED_TERMS_SINCE_LAST_VERSION = new Set([
+  // Add terms here when you update glossary.js to avoid full cache invalidation.
+  // Example: 'Tribunal', 'Fiscal Deficit'
+  // Empty set = no granular invalidation, fall back to full version check.
+]);
 
 // ── In-memory LRU cache ─────────────────────────────────────────────────────
 const MAX_MEMORY_ENTRIES = 5000;
 const memoryCache = new Map();  // key: hash → { translated, ts, version }
 
 function hashText(text) {
-  return crypto.createHash('md5').update(text.trim()).digest('hex');
+  // Normalize whitespace before hashing to avoid cache misses on formatting differences
+  return crypto.createHash('md5').update(text.trim().replace(/\s+/g, ' ')).digest('hex');
+}
+
+/**
+ * Check if a source text contains any of the recently changed glossary terms.
+ * Used for granular cache invalidation - only re-translate paragraphs
+ * that actually use the changed terms.
+ */
+function textContainsChangedTerms(text) {
+  if (CHANGED_TERMS_SINCE_LAST_VERSION.size === 0) return false;
+  const lower = text.toLowerCase();
+  for (const term of CHANGED_TERMS_SINCE_LAST_VERSION) {
+    if (lower.includes(term.toLowerCase())) return true;
+  }
+  return false;
 }
 
 // Evict oldest entries when memory cache is full
@@ -108,19 +133,29 @@ export async function lookupCache(texts) {
   const dbMissIndices = [];
 
   // Layer 1: in-memory (reject entries from old glossary versions)
+  // Granular check: if version differs but no changed terms appear in source,
+  // the cached translation is still valid (glossary change doesn't affect it).
   for (let i = 0; i < texts.length; i++) {
     const text = texts[i]?.trim();
     if (!text) continue;
     const hash = hashText(text);
     const cached = memoryCache.get(hash);
-    if (cached && cached.version === GLOSSARY_VERSION) {
-      hits.set(i, cached.translated);
-      cached.ts = Date.now(); // refresh LRU timestamp
-    } else {
-      if (cached) memoryCache.delete(hash); // evict stale entry
-      dbMissHashes.push(hash);
-      dbMissIndices.push(i);
+    if (cached) {
+      const versionMatch = cached.version === GLOSSARY_VERSION;
+      const granularSafe = !versionMatch
+        && CHANGED_TERMS_SINCE_LAST_VERSION.size > 0
+        && !textContainsChangedTerms(text);
+
+      if (versionMatch || granularSafe) {
+        hits.set(i, cached.translated);
+        cached.ts = Date.now(); // refresh LRU timestamp
+        if (granularSafe) cached.version = GLOSSARY_VERSION; // promote to current version
+        continue;
+      }
+      memoryCache.delete(hash); // evict stale entry
     }
+    dbMissHashes.push(hash);
+    dbMissIndices.push(i);
   }
 
   // Layer 2: Supabase (only for memory misses)

@@ -5,7 +5,7 @@ import JSZip from 'jszip';
 import { extractParagraphTexts, extractDocumentStats } from './docxProcessor.js';
 
 /**
- * Parse uploaded DOCX file and extract text content.
+ * Parse uploaded file (DOCX or PDF) and extract text content.
  */
 export async function parseFile(filePath) {
   const ext = path.extname(filePath).toLowerCase();
@@ -13,7 +13,10 @@ export async function parseFile(filePath) {
   if (ext === '.docx') {
     return parseDOCX(filePath);
   }
-  throw new Error(`Unsupported file format: ${ext}. Only .docx files are accepted.`);
+  if (ext === '.pdf') {
+    return parsePDF(filePath);
+  }
+  throw new Error(`Unsupported file format: ${ext}. Accepted: .docx, .pdf`);
 }
 
 async function parseDOCX(filePath) {
@@ -57,6 +60,47 @@ async function parseDOCX(filePath) {
     format: 'docx',
     paragraphTexts,
     docStats, // { tableCount, imageCount, paragraphMeta[] }
+  };
+}
+
+/**
+ * Parse uploaded PDF file and extract text content.
+ * Uses pdf-parse for text extraction. Falls back gracefully if not installed.
+ * Note: scanned/image PDFs will produce empty text - user should convert to DOCX.
+ */
+async function parsePDF(filePath) {
+  let pdfParse;
+  try {
+    pdfParse = (await import('pdf-parse')).default;
+  } catch {
+    throw new Error('PDF support requires pdf-parse package. Install with: npm install pdf-parse');
+  }
+
+  const buffer = fs.readFileSync(filePath);
+  const data = await pdfParse(buffer);
+
+  const text = data.text || '';
+  const pageCount = data.numpages || Math.max(1, Math.ceil(text.length / 2000));
+
+  if (!text.trim()) {
+    throw new Error('PDF appears to be scanned/image-based with no extractable text. Please convert to DOCX using OCR software first.');
+  }
+
+  // Split text into paragraphs by double newlines or single newlines with sufficient gap
+  const rawParagraphs = text.split(/\n\s*\n/);
+  const paragraphTexts = rawParagraphs
+    .map(p => p.replace(/\n/g, ' ').trim())
+    .filter(p => p.length > 0);
+
+  console.log(`  PDF parsed: ${pageCount} pages, ${paragraphTexts.length} paragraphs, ${text.length} chars`);
+
+  return {
+    text,
+    pageCount,
+    metadata: { title: data.info?.Title || '', author: data.info?.Author || '' },
+    format: 'pdf',
+    paragraphTexts,
+    docStats: { tableCount: 0, imageCount: 0, paragraphMeta: [] },
   };
 }
 

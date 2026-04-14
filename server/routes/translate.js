@@ -63,8 +63,11 @@ fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: UPLOAD_DIR,
-  // Always use .docx extension — ignore original extension to prevent path traversal via crafted filenames
-  filename: (req, file, cb) => cb(null, `${uuidv4()}.docx`),
+  // Preserve original extension for PDF support, sanitize filename with UUID
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${uuidv4()}${ext === '.pdf' ? '.pdf' : '.docx'}`);
+  },
 });
 
 const upload = multer({
@@ -72,12 +75,12 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.pdf' || ext === '.txt') {
-      cb(new Error('Only DOCX files are supported. Please convert to DOCX first.'));
-    } else if (ext === '.docx') {
+    if (ext === '.docx' || ext === '.pdf') {
       cb(null, true);
+    } else if (ext === '.txt') {
+      cb(new Error('Plain text files are not supported. Please use DOCX or PDF format.'));
     } else {
-      cb(new Error(`Unsupported file type: ${ext}. Only .docx files are accepted.`));
+      cb(new Error(`Unsupported file type: ${ext}. Accepted formats: .docx, .pdf`));
     }
   },
 });
@@ -117,12 +120,14 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
   const baseName = path.basename(originalName, path.extname(originalName));
   const MAX_CONTEXT_LENGTH = 2000;
   const bookContext = (req.body.bookContext || '').trim().slice(0, MAX_CONTEXT_LENGTH);
+  const subject = (req.body.subject || '').trim().slice(0, 50) || null;
 
   const job = {
     id: jobId,
     userId: req.user.id,
     originalName,
     bookContext,
+    subject,
     status: 'processing',
     progress: 0,
     message: 'File uploaded, starting translation...',
@@ -149,7 +154,7 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
           'Content-Type': 'application/json',
           'x-internal-secret': process.env.INTERNAL_SECRET || '',
         },
-        body: JSON.stringify({ jobId, storageKey, baseName, bookContext, userId: req.user.id, userRole: req.user.role }),
+        body: JSON.stringify({ jobId, storageKey, baseName, bookContext, subject, userId: req.user.id, userRole: req.user.role }),
       });
 
       if (!bgRes.ok) {
@@ -167,7 +172,7 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
   } else {
     // ── Local / Render: respond immediately, run translation in background ────
     res.json({ jobId, message: 'Translation started', originalName });
-    processTranslation(jobId, req.file.path, baseName, bookContext, req.user.id, req.user.role, OUTPUT_DIR)
+    processTranslation(jobId, req.file.path, baseName, bookContext, req.user.id, req.user.role, OUTPUT_DIR, subject)
       .catch(async (error) => {
         console.error(`Job ${jobId} failed:`, error);
         try { await dbUpdateJob(jobId, { status: 'failed', message: error.message }); } catch {}
@@ -178,7 +183,7 @@ router.post('/upload', uploadLimiter, requireAuth, (req, res, next) => {
 // ─── POST /api/translate/prepare ─────────────────────────────────────────────
 // Step 1 of direct-upload flow: validate, create job, return Supabase signed URL
 router.post('/prepare', uploadLimiter, requireAuth, async (req, res) => {
-  const { filename, bookContext: rawContext } = req.body;
+  const { filename, bookContext: rawContext, subject: rawSubject } = req.body;
   if (!filename || !filename.toLowerCase().endsWith('.docx')) {
     return res.status(400).json({ error: 'Only .docx files are accepted.' });
   }
@@ -201,11 +206,13 @@ router.post('/prepare', uploadLimiter, requireAuth, async (req, res) => {
 
   const jobId = uuidv4();
   const bookContext = (rawContext || '').trim().slice(0, 2000);
+  const subject = (rawSubject || '').trim().slice(0, 50) || null;
   const job = {
     id: jobId,
     userId: req.user.id,
     originalName: filename,
     bookContext,
+    subject,
     status: 'processing',
     progress: 0,
     message: 'Uploading file...',
@@ -462,6 +469,40 @@ router.post('/share/:jobId', requireAuth, async (req, res) => {
       return res.status(503).json({ error: 'Email service not configured. Ask admin to set SMTP credentials.' });
     }
     res.status(500).json({ error: 'Failed to send email. Please try again.' });
+  }
+});
+
+// ── Translation Feedback ─────────────────────────────────────────────────
+router.post('/feedback', requireAuth, async (req, res) => {
+  try {
+    const { jobId, paragraphIndex, rating, comment } = req.body;
+    if (!jobId || paragraphIndex === undefined || !rating) {
+      return res.status(400).json({ error: 'jobId, paragraphIndex, and rating are required' });
+    }
+    if (!['good', 'bad', 'wrong_term'].includes(rating)) {
+      return res.status(400).json({ error: 'rating must be good, bad, or wrong_term' });
+    }
+
+    // Store feedback (append to job metadata)
+    const job = await dbGetJob(jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    const feedback = job.feedback || [];
+    feedback.push({
+      paragraphIndex,
+      rating,
+      comment: (comment || '').slice(0, 500),
+      userId: req.user.id,
+      timestamp: new Date().toISOString(),
+    });
+
+    await dbUpdateJob(jobId, { feedback });
+
+    console.log(`  Feedback: job=${jobId} para=${paragraphIndex} rating=${rating}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Feedback error:', error.message);
+    res.status(500).json({ error: 'Failed to save feedback' });
   }
 });
 

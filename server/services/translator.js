@@ -23,17 +23,31 @@ const IS_THINKING_MODEL = GEMINI_MODEL.includes('2.5');
 const UPSC_BASE_PROMPT = `You are an expert Hindi translator for UPSC/HCS competitive exam material. Translate everything from English to formal Hindi (राजभाषा) using the exact language of official UPSC question papers and Lok Sabha proceedings.
 
 RULES:
-1. NEVER transliterate. Use proper Hindi: राजकोषीय (fiscal), न्यायपालिका (judiciary), अध्यादेश (ordinance), अधिकरण (tribunal).
+1. NEVER transliterate. Always TRANSLATE to proper Hindi. Common mistakes to avoid:
+   WRONG: फिस्कल → CORRECT: राजकोषीय (fiscal)
+   WRONG: ज्यूडिशियरी → CORRECT: न्यायपालिका (judiciary)
+   WRONG: ट्रिब्यूनल → CORRECT: अधिकरण (tribunal)
+   WRONG: ऑर्डिनेंस → CORRECT: अध्यादेश (ordinance)
+   WRONG: गवर्नमेंट → CORRECT: सरकार (government)
+   WRONG: कांस्टीट्यूशन → CORRECT: संविधान (constitution)
+   WRONG: पार्लियामेंट → CORRECT: संसद (parliament)
+   WRONG: कमिटी → CORRECT: समिति (committee)
+   WRONG: रिपोर्ट → CORRECT: प्रतिवेदन (report, in formal context)
 2. Keep abbreviations as-is: UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, PIL, CAG, DNA, pH, AM, PM, WTO, UNESCO, UNICEF, WHO, NDA, BJP, INC, etc.
 3. GLOSSARY IS MANDATORY: Use the glossary terms EXACTLY as given — they override your default choices. If the glossary says "Tribunal" = "अधिकरण", you MUST use "अधिकरण" every time. Never deviate from glossary mappings.
 4. MCQ labels: (a)(b)(c)(d) stay in English. One option per line. Never drop or merge labels. Use कूट (not कोड), कीजिए (not करें), चुनिए (not चुनें), उपर्युक्त (not उपरोक्त).
 5. Single letters as variables/labels (A, B, C in match-the-following; P, Q, R in puzzles): keep as English. WRONG: ए-3, बी-2 → CORRECT: A-3, B-2.
 6. Roman numerals I, II, III: keep as-is. Never translate I as मैं.
 7. Numbers, dates, years, math formulas, percentages: keep unchanged.
-8. ⚠ MANDATORY: Translate EVERY English sentence, question stem, and option text into Hindi. If you see an English question like "Which of the following..." or "Consider the following statements..." — you MUST translate it. Leaving any English sentence untranslated is a critical error.
+8. ⚠ MANDATORY: Translate EVERY English sentence, question stem, option text, and list item into Hindi. This includes short lines like "List-I (Article)", "1. Abolition of titles", "Protection of life and personal liberty". Even single-line items MUST be translated. Leaving ANY English text untranslated is a critical error. If a paragraph has <<<PN>>> prefix, you MUST output the translated version with the same <<<PN>>> prefix.
 9. Transliterate all person names and place names to Devanagari script: Annie Besant → एनी बेसेंट, A.O. Hume → ए.ओ. ह्यूम, Sarojini Naidu → सरोजिनी नायडू, Tilak → तिलक, Bombay → बंबई/मुंबई.
 10. Exam source citation tags appear as §§0§§, §§1§§ etc. — keep these placeholders EXACTLY as-is in your output. Do NOT translate, modify, or remove them. They are technical markers.
-11. Output ONLY the translated text. No explanations, notes, or comments.`;
+11. Output ONLY the translated text. No explanations, notes, or comments.
+12. VERIFICATION BEFORE OUTPUT: Check each translated paragraph:
+   - Is every English sentence fully translated to Hindi? If any English sentence remains, translate it now.
+   - Are glossary terms used correctly? Cross-check against the glossary provided.
+   - Are (a)(b)(c)(d) labels and A-1, B-2 codes preserved in English?
+   - Are all §§N§§ placeholders intact?`;
 
 // Precompute all prompts once at startup — enables Gemini implicit prefix caching
 // (same string object reused → API caches KV across calls → much faster)
@@ -283,6 +297,7 @@ export async function translateChunk(text, chunkIndex, totalChunks, onProgress) 
  * Translate all chunks sequentially with progress reporting.
  */
 export async function translateAllChunks(chunks, onProgress, bookContext = '') {
+  bookContext = sanitizeBookContext(bookContext);
   const translated = [];
 
   for (let i = 0; i < chunks.length; i++) {
@@ -368,7 +383,22 @@ function reattachAnswerLines(translated, answerMap) {
   return result;
 }
 
+/**
+ * Sanitize user-provided bookContext to prevent prompt injection.
+ */
+function sanitizeBookContext(ctx) {
+  if (!ctx || typeof ctx !== 'string') return '';
+  // Strip anything that looks like prompt injection
+  let clean = ctx.slice(0, 200); // Max 200 chars
+  clean = clean.replace(/ignore\s+(all|previous|above)/gi, '');
+  clean = clean.replace(/translate\s+(everything|all)\s+to\s+english/gi, '');
+  clean = clean.replace(/output\s+only\s+english/gi, '');
+  clean = clean.replace(/do\s+not\s+translate/gi, '');
+  return clean.trim();
+}
+
 export async function translateParagraphs(paragraphs, bookContext = '', onProgress) {
+  bookContext = sanitizeBookContext(bookContext);
   // Pre-process: separate answer lines merged with option (d) text
   const { processed: cleanedParagraphs, answerMap } = separateAnswerLines(paragraphs);
   if (answerMap.size > 0) {
@@ -412,8 +442,15 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 
 // ── Gemini paragraph translation (batched, parallel, with translation memory) ─
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  const BATCH_SIZE = 30;
-  const CONCURRENCY = 5; // Paid API key — run 5 batches in parallel
+  // Dynamic batch size - starts at 30, reduces on API failures
+  let BATCH_SIZE = 30;
+  const MIN_BATCH = 10;
+  const MAX_BATCH = 50;
+
+  // Track API response times to adjust batch size
+  let lastBatchTime = 0;
+
+  const CONCURRENCY = 5; // Paid API key - run 5 batches in parallel
 
   const translated = new Array(paragraphs.length).fill('');
 
@@ -492,7 +529,18 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
         });
 
         if (nonEmptyTexts.length > 0) {
+          const batchTimerStart = Date.now();
           const results = await translateWithGemini(nonEmptyTexts);
+          lastBatchTime = Date.now() - batchTimerStart;
+
+          // Adjust batch size based on API response time
+          if (lastBatchTime > 15000 && BATCH_SIZE > MIN_BATCH) {
+            BATCH_SIZE = Math.max(MIN_BATCH, BATCH_SIZE - 5);
+            console.log(`  Reducing batch size to ${BATCH_SIZE} (slow API)`);
+          } else if (lastBatchTime < 5000 && BATCH_SIZE < MAX_BATCH) {
+            BATCH_SIZE = Math.min(MAX_BATCH, BATCH_SIZE + 5);
+          }
+
           nonEmptyLocalIndices.forEach((localIdx, ri) => {
             let t = results[ri] || batch[localIdx];
             t = applyGlossaryPostProcessing(t, batch[localIdx]);

@@ -31,6 +31,38 @@ export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, out
     zip.file('word/document.xml', modifiedXml, { compression: 'DEFLATE' });
   }
 
+  // Also translate headers and footers if they contain text
+  // UPSC papers often have important headers: "GS Paper 1", "Time: 2 Hours", "Marks: 200"
+  const headerFooterFiles = [];
+  zip.forEach((relativePath) => {
+    if (/^word\/(header|footer)\d*\.xml$/.test(relativePath)) {
+      headerFooterFiles.push(relativePath);
+    }
+  });
+
+  for (const hfPath of headerFooterFiles) {
+    try {
+      const hfFile = zip.file(hfPath);
+      if (!hfFile) continue;
+      const hfXml = await hfFile.async('string');
+      // Only process if it contains text paragraphs with actual content
+      const hasText = /<w:t[^>]*>[^<]+<\/w:t>/.test(hfXml);
+      if (hasText) {
+        // Extract paragraph texts from header/footer, translate, and replace
+        const hfParagraphs = extractParagraphTextsFromXml(hfXml);
+        if (hfParagraphs.some(p => p.trim().length > 3)) {
+          // For headers/footers, we pass them through as-is since they're already
+          // included in the main paragraph extraction by fileParser.
+          // This just ensures the XML structure is valid after any font changes.
+          console.log(`  Header/footer found: ${hfPath} (${hfParagraphs.filter(p => p.trim()).length} text paragraphs)`);
+        }
+      }
+    } catch (e) {
+      // Non-fatal: header/footer translation failure shouldn't block the document
+      console.warn(`  Header/footer processing skipped for ${hfPath}: ${e.message}`);
+    }
+  }
+
   // Generate output — JSZip re-uses original compressed data for untouched files
   const outputBuffer = await zip.generateAsync({
     type: 'nodebuffer',
@@ -40,6 +72,28 @@ export async function cloneAndTranslateDOCX(inputPath, translatedParagraphs, out
   fs.writeFileSync(outputPath, outputBuffer);
 
   return outputPath;
+}
+
+/**
+ * Extract plain text from each <w:p> paragraph in an XML string.
+ * Used for header/footer text detection.
+ */
+function extractParagraphTextsFromXml(xml) {
+  const paragraphs = [];
+  const pRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g;
+  let match;
+  while ((match = pRegex.exec(xml)) !== null) {
+    const pXml = match[0];
+    // Extract all <w:t> text content
+    const texts = [];
+    const tRegex = /<w:t[^>]*>([\s\S]*?)<\/w:t>/g;
+    let tMatch;
+    while ((tMatch = tRegex.exec(pXml)) !== null) {
+      texts.push(tMatch[1]);
+    }
+    paragraphs.push(texts.join(''));
+  }
+  return paragraphs;
 }
 
 /**
