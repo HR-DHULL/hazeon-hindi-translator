@@ -24,7 +24,12 @@ function AppShell() {
         if (r.status === 401) { logout(); return null; }
         return r.json();
       })
-      .then(data => { if (data && Array.isArray(data)) setJobs(data); })
+      .then(data => {
+        if (!data) return;
+        // Support both paginated { jobs, total } and flat array responses
+        if (Array.isArray(data)) setJobs(data);
+        else if (data.jobs && Array.isArray(data.jobs)) setJobs(data.jobs);
+      })
       .catch((err) => { console.error('Failed to load jobs:', err.message); });
 
   useEffect(() => {
