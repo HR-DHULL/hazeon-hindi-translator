@@ -3916,21 +3916,54 @@ export const SUBJECT_GLOSSARIES = {
  * Build the glossary string for the translation prompt.
  * Injects subject-specific terms first (HIGH PRIORITY), then base glossary.
  */
-export function getGlossaryPrompt(subject = null) {
-  // Compact format: "Term=Hindi" saves ~30% tokens vs "Term" → "Hindi"
-  const baseEntries = Object.entries(UPSC_HCS_GLOSSARY)
-    .map(([en, hi]) => `${en}=${hi}`)
-    .join('\n');
+/**
+ * Get glossary prompt - only includes terms relevant to the given text.
+ * With 2000+ terms, sending all of them wastes ~17K tokens per API call.
+ * Filtering to relevant terms saves 80-90% of tokens.
+ *
+ * @param {string|null} subject - detected subject (polity, history, etc.)
+ * @param {string} batchText - optional: combined text of current batch for relevance filtering
+ */
+export function getGlossaryPrompt(subject = null, batchText = '') {
+  let entries;
+
+  if (batchText && batchText.length > 50) {
+    // Smart mode: only include glossary terms that appear in the batch text
+    // This cuts prompt from ~17K tokens to ~1-2K tokens per call
+    const upperText = batchText.toUpperCase();
+    entries = Object.entries(UPSC_HCS_GLOSSARY)
+      .filter(([en]) => upperText.includes(en.toUpperCase()));
+
+    // Always include common MCQ patterns (they're short and critical)
+    const mcqPatterns = Object.entries(UPSC_HCS_GLOSSARY)
+      .filter(([en]) => /^(Only \d|[123].*(only|and)|Both|Neither|All of|None of|Which of|Consider|Select|Code)/.test(en));
+    const entryKeys = new Set(entries.map(([en]) => en));
+    for (const [en, hi] of mcqPatterns) {
+      if (!entryKeys.has(en)) entries.push([en, hi]);
+    }
+  } else {
+    // Fallback: send all terms (used when no batch text available)
+    entries = Object.entries(UPSC_HCS_GLOSSARY);
+  }
+
+  const baseEntries = entries.map(([en, hi]) => `${en}=${hi}`).join('\n');
 
   let subjectSection = '';
   if (subject && SUBJECT_GLOSSARIES[subject]) {
-    const subjectEntries = Object.entries(SUBJECT_GLOSSARIES[subject])
-      .map(([en, hi]) => `${en}=${hi}`)
-      .join('\n');
-    subjectSection = `## ${subject.toUpperCase()} GLOSSARY (apply these first):
-${subjectEntries}
+    let subjectEntries;
+    if (batchText && batchText.length > 50) {
+      const upperText = batchText.toUpperCase();
+      subjectEntries = Object.entries(SUBJECT_GLOSSARIES[subject])
+        .filter(([en]) => upperText.includes(en.toUpperCase()));
+    } else {
+      subjectEntries = Object.entries(SUBJECT_GLOSSARIES[subject]);
+    }
+    if (subjectEntries.length > 0) {
+      subjectSection = `## ${subject.toUpperCase()} GLOSSARY (apply these first):
+${subjectEntries.map(([en, hi]) => `${en}=${hi}`).join('\n')}
 
 `;
+    }
   }
 
   return `${subjectSection}## TERMINOLOGY (use exact translations below — override your defaults):

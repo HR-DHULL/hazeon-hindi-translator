@@ -49,20 +49,17 @@ RULES:
    - Are (a)(b)(c)(d) labels and A-1, B-2 codes preserved in English?
    - Are all §§N§§ placeholders intact?`;
 
-// Precompute all prompts once at startup — enables Gemini implicit prefix caching
-// (same string object reused → API caches KV across calls → much faster)
-const SYSTEM_PROMPTS = {
-  default:     UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt(null),
-  history:     UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('history'),
-  geography:   UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('geography'),
-  economics:   UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('economics'),
-  science:     UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('science'),
-  environment: UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('environment'),
-  polity:      UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt('polity'),
-};
-
-function buildSystemPrompt(subject = null) {
-  return SYSTEM_PROMPTS[subject] || SYSTEM_PROMPTS.default;
+/**
+ * Build system prompt dynamically per batch.
+ * Only includes glossary terms that appear in the batch text.
+ * This reduced prompt from ~17K tokens (all 2083 terms) to ~1-2K tokens per call.
+ * Massive reduction in token usage = fewer 429 rate limit errors.
+ *
+ * @param {string|null} subject - detected subject
+ * @param {string} batchText - combined text of paragraphs in this batch
+ */
+function buildSystemPrompt(subject = null, batchText = '') {
+  return UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt(subject, batchText);
 }
 
 // ── Gemini translation ───────────────────────────────────────────────────────
@@ -203,8 +200,8 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
     }
   }
 
-  // Build system prompt with detected subject, then create model
-  const systemPrompt = buildSystemPrompt(detectedSubject);
+  // Build system prompt with detected subject + batch-specific glossary
+  const systemPrompt = buildSystemPrompt(detectedSubject, fullText);
   const model = genAI.getGenerativeModel({
     model: GEMINI_MODEL,
     systemInstruction: systemPrompt,
@@ -443,17 +440,18 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 // ── Gemini paragraph translation (batched, parallel, with translation memory) ─
 async function translateParagraphsBatched(paragraphs, onProgress) {
   // Dynamic batch size - starts at 30, reduces on API failures
-  // Adaptive batch size: smaller for large docs to prevent OOM and rate limits
-  let BATCH_SIZE = paragraphs.length > 1000 ? 15 : paragraphs.length > 500 ? 20 : 30;
+  // Batch size: with filtered glossary, each call uses ~2K tokens instead of 17K
+  // so we can use larger batches again
+  let BATCH_SIZE = paragraphs.length > 2000 ? 20 : 30;
   const MIN_BATCH = 10;
   const MAX_BATCH = 40;
 
   // Track API response times to adjust batch size
   let lastBatchTime = 0;
 
-  // Adaptive concurrency: lower for large docs to prevent OOM + 429 rate limits
-  // 512MB Render free tier: 3000 paragraphs in memory = ~200MB, needs headroom
-  let CONCURRENCY = paragraphs.length > 1000 ? 1 : paragraphs.length > 500 ? 2 : 3;
+  // Adaptive concurrency: with batch-filtered glossary, token usage is much lower
+  // so we can run more concurrently without hitting 1M tokens/min quota
+  let CONCURRENCY = paragraphs.length > 2000 ? 2 : paragraphs.length > 500 ? 3 : 5;
 
   const translated = new Array(paragraphs.length).fill('');
 
