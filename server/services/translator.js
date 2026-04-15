@@ -559,41 +559,58 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
           });
         }
       } catch (err) {
-        const isRateLimit = err.message.includes('429') || /quota|rate.?limit/i.test(err.message);
+        const isRateLimit = err.message.includes('429') || /quota|rate.?limit|exhausted/i.test(err.message);
         const isTimeout = err.message.includes('timed out');
-        console.warn(`Gemini batch ${b + 1} ${isTimeout ? 'timed out' : isRateLimit ? 'rate-limited (429)' : `failed: ${err.message}`}. Retrying individually...`);
+        console.warn(`Gemini batch ${b + 1} ${isTimeout ? 'timed out' : isRateLimit ? 'rate-limited (429)' : `failed: ${err.message}`}. Retrying with backoff...`);
 
-        if (isRateLimit) await new Promise(r => setTimeout(r, 5000));
+        // On rate limit: wait for quota to reset (Gemini resets per minute)
+        // Parse retry delay from error if available, otherwise wait 45s
+        let waitMs = 15000;
+        if (isRateLimit) {
+          const retryMatch = err.message.match(/retry\s*(?:in|after|Delay[":]*)\s*([\d.]+)/i);
+          waitMs = retryMatch ? Math.ceil(parseFloat(retryMatch[1]) * 1000) + 2000 : 45000;
+          console.log(`  Waiting ${Math.round(waitMs/1000)}s for rate limit to reset...`);
+          await new Promise(r => setTimeout(r, waitMs));
+        }
 
-        for (let i = 0; i < batch.length; i++) {
-          if (!batch[i].trim()) continue;
-          const origIdx = batchOriginalIndices[i];
-          try {
-            const results = await translateWithGemini([batch[i]]);
-            let t = results[0] || batch[i];
-            t = applyGlossaryPostProcessing(t, batch[i]);
-            t = applyHindiCorrections(t);
-            translated[origIdx] = t;
-            if (!/§§?\s*\d+\s*§§?/.test(t)) {
-              newTranslations.push({ source: batch[i], translated: t });
+        // Retry the whole batch first (cheaper than individual retries)
+        try {
+          const nonEmpty = [];
+          const nonEmptyIdx = [];
+          batch.forEach((p, i) => { if (p.trim()) { nonEmpty.push(p); nonEmptyIdx.push(i); } });
+          if (nonEmpty.length > 0) {
+            const results = await translateWithGemini(nonEmpty);
+            nonEmptyIdx.forEach((localIdx, ri) => {
+              let t = results[ri] || batch[localIdx];
+              t = applyGlossaryPostProcessing(t, batch[localIdx]);
+              t = applyHindiCorrections(t);
+              const origIdx = batchOriginalIndices[localIdx];
+              translated[origIdx] = t;
+              if (!/§§?\s*\d+\s*§§?/.test(t)) {
+                newTranslations.push({ source: batch[localIdx], translated: t });
+              }
+            });
+          }
+        } catch (batchRetryErr) {
+          // Batch retry also failed - fall back to individual with long delays
+          console.warn(`  Batch retry failed: ${batchRetryErr.message}. Trying individually with 10s gaps...`);
+          for (let i = 0; i < batch.length; i++) {
+            if (!batch[i].trim()) continue;
+            const origIdx = batchOriginalIndices[i];
+            try {
+              await new Promise(r => setTimeout(r, 10000)); // 10s between each
+              const results = await translateWithGemini([batch[i]]);
+              let t = results[0] || batch[i];
+              t = applyGlossaryPostProcessing(t, batch[i]);
+              t = applyHindiCorrections(t);
+              translated[origIdx] = t;
+              if (!/§§?\s*\d+\s*§§?/.test(t)) {
+                newTranslations.push({ source: batch[i], translated: t });
+              }
+            } catch (retryErr) {
+              console.warn(`  Individual retry failed for paragraph ${origIdx}: ${retryErr.message?.slice(0, 80)}`);
+              translated[origIdx] = batch[i]; // keep original as fallback
             }
-          } catch (retryErr) {
-            if (/429|quota|rate.?limit/i.test(retryErr.message)) {
-              await new Promise(r => setTimeout(r, 5000));
-              try {
-                const results = await translateWithGemini([batch[i]]);
-                let t = results[0] || batch[i];
-                t = applyGlossaryPostProcessing(t, batch[i]);
-                t = applyHindiCorrections(t);
-                translated[origIdx] = t;
-                if (!/§§?\s*\d+\s*§§?/.test(t)) {
-                  newTranslations.push({ source: batch[i], translated: t });
-                }
-                continue;
-              } catch (_) {}
-            }
-            console.warn(`  Individual retry failed for paragraph ${origIdx}: ${retryErr.message}`);
-            translated[origIdx] = batch[i];
           }
         }
       }
@@ -665,7 +682,7 @@ async function verifyAndFixTranslations(originals, translated, onProgress, skipI
   }
 
   // Cap second-pass retries to limit API cost (raised from 15 to 30 for better coverage)
-  const MAX_SECOND_PASS = 30;
+  const MAX_SECOND_PASS = 15; // reduced from 30 to limit API cost on large docs
   if (problematic.length > MAX_SECOND_PASS) {
     console.log(`  Two-pass review: capping from ${problematic.length} → ${MAX_SECOND_PASS} paragraphs to limit API cost`);
     problematic.length = MAX_SECOND_PASS;
