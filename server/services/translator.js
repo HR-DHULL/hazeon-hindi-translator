@@ -559,55 +559,65 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
       } catch (err) {
         const isRateLimit = err.message.includes('429') || /quota|rate.?limit|exhausted/i.test(err.message);
         const isTimeout = err.message.includes('timed out');
-        console.warn(`Gemini batch ${b + 1} ${isTimeout ? 'timed out' : isRateLimit ? 'rate-limited (429)' : `failed: ${err.message}`}. Retrying with backoff...`);
+        const is503 = err.message.includes('503');
 
-        // On rate limit: wait for quota to reset (Gemini resets per minute)
-        // Parse retry delay from error if available, otherwise wait 45s
-        let waitMs = 15000;
-        if (isRateLimit) {
+        if (isRateLimit || is503) {
+          // RATE LIMITED or SERVICE UNAVAILABLE:
+          // Wait for the FULL cooldown, then retry the batch ONCE. No individual retries.
+          // Individual retries cause a cascade that burns the entire quota.
           const retryMatch = err.message.match(/retry\s*(?:in|after|Delay[":]*)\s*([\d.]+)/i);
-          waitMs = retryMatch ? Math.ceil(parseFloat(retryMatch[1]) * 1000) + 2000 : 45000;
-          console.log(`  Waiting ${Math.round(waitMs/1000)}s for rate limit to reset...`);
-          await new Promise(r => setTimeout(r, waitMs));
-        }
+          const waitMs = retryMatch ? Math.ceil(parseFloat(retryMatch[1]) * 1000) + 5000 : 60000;
+          console.warn(`  Batch ${b + 1}: ${isRateLimit ? '429 rate-limited' : '503 unavailable'}. Waiting ${Math.round(waitMs/1000)}s then retrying batch once...`);
 
-        // Retry the whole batch first (cheaper than individual retries)
-        try {
-          const nonEmpty = [];
-          const nonEmptyIdx = [];
-          batch.forEach((p, i) => { if (p.trim()) { nonEmpty.push(p); nonEmptyIdx.push(i); } });
-          if (nonEmpty.length > 0) {
-            const results = await translateWithGemini(nonEmpty);
-            nonEmptyIdx.forEach((localIdx, ri) => {
-              let t = results[ri] || batch[localIdx];
-              t = applyGlossaryPostProcessing(t, batch[localIdx]);
-              t = applyHindiCorrections(t);
-              const origIdx = batchOriginalIndices[localIdx];
-              translated[origIdx] = t;
-              if (!/§§?\s*\d+\s*§§?/.test(t)) {
-                newTranslations.push({ source: batch[localIdx], translated: t });
-              }
-            });
+          // Also reduce concurrency for remaining batches
+          if (CONCURRENCY > 1) {
+            CONCURRENCY = 1;
+            console.log(`  Reduced concurrency to 1 for remaining batches`);
           }
-        } catch (batchRetryErr) {
-          // Batch retry also failed - fall back to individual with long delays
-          console.warn(`  Batch retry failed: ${batchRetryErr.message}. Trying individually with 10s gaps...`);
-          for (let i = 0; i < batch.length; i++) {
-            if (!batch[i].trim()) continue;
-            const origIdx = batchOriginalIndices[i];
-            try {
-              await new Promise(r => setTimeout(r, 10000)); // 10s between each
-              const results = await translateWithGemini([batch[i]]);
-              let t = results[0] || batch[i];
-              t = applyGlossaryPostProcessing(t, batch[i]);
-              t = applyHindiCorrections(t);
-              translated[origIdx] = t;
-              if (!/§§?\s*\d+\s*§§?/.test(t)) {
-                newTranslations.push({ source: batch[i], translated: t });
+
+          await new Promise(r => setTimeout(r, waitMs));
+
+          // ONE retry of the whole batch
+          try {
+            const nonEmpty = [];
+            const nonEmptyIdx = [];
+            batch.forEach((p, i) => { if (p.trim()) { nonEmpty.push(p); nonEmptyIdx.push(i); } });
+            if (nonEmpty.length > 0) {
+              const results = await translateWithGemini(nonEmpty);
+              nonEmptyIdx.forEach((localIdx, ri) => {
+                let t = results[ri] || batch[localIdx];
+                t = applyGlossaryPostProcessing(t, batch[localIdx]);
+                t = applyHindiCorrections(t);
+                const origIdx = batchOriginalIndices[localIdx];
+                translated[origIdx] = t;
+                if (!/§§?\s*\d+\s*§§?/.test(t)) {
+                  newTranslations.push({ source: batch[localIdx], translated: t });
+                }
+              });
+            }
+          } catch (_) {
+            // Retry also failed - keep originals, move on. Do NOT cascade into individual retries.
+            console.warn(`  Batch ${b + 1} retry also failed. Keeping ${batch.filter(p => p.trim()).length} paragraphs as original English. Will catch in second-pass review.`);
+            for (let i = 0; i < batch.length; i++) {
+              if (batch[i].trim()) {
+                translated[batchOriginalIndices[i]] = batch[i];
               }
-            } catch (retryErr) {
-              console.warn(`  Individual retry failed for paragraph ${origIdx}: ${retryErr.message?.slice(0, 80)}`);
-              translated[origIdx] = batch[i]; // keep original as fallback
+            }
+          }
+        } else if (isTimeout) {
+          // TIMEOUT: split batch in half and retry each half
+          console.warn(`  Batch ${b + 1} timed out. Keeping originals — will retry in second-pass.`);
+          for (let i = 0; i < batch.length; i++) {
+            if (batch[i].trim()) {
+              translated[batchOriginalIndices[i]] = batch[i];
+            }
+          }
+        } else {
+          // OTHER ERROR: log and keep originals
+          console.warn(`  Batch ${b + 1} failed: ${err.message?.slice(0, 100)}. Keeping originals.`);
+          for (let i = 0; i < batch.length; i++) {
+            if (batch[i].trim()) {
+              translated[batchOriginalIndices[i]] = batch[i];
             }
           }
         }
@@ -696,8 +706,16 @@ async function verifyAndFixTranslations(originals, translated, onProgress, skipI
   }
 
   const result = [...translated];
+  let rateLimitHit = false;
   for (const idx of problematic) {
+    if (rateLimitHit) {
+      // Once rate limited, skip remaining retries to avoid burning quota
+      console.warn(`    Skipping paragraph ${idx} (rate limit active)`);
+      continue;
+    }
     try {
+      // Small delay between each force-translate to avoid rate limits
+      await new Promise(r => setTimeout(r, 1000));
       const fixed = await forceTranslateSingle(originals[idx]);
       if (fixed && !hasUntranslatedEnglish(fixed, originals[idx])) {
         result[idx] = fixed;
@@ -706,7 +724,12 @@ async function verifyAndFixTranslations(originals, translated, onProgress, skipI
         console.warn(`    ✗ Paragraph ${idx} still has English after force-translate`);
       }
     } catch (e) {
-      console.warn(`    Force-translate failed for paragraph ${idx}: ${e.message}`);
+      if (/429|quota|exhausted|rate.?limit/i.test(e.message)) {
+        console.warn(`    Rate limited during second-pass. Stopping retries.`);
+        rateLimitHit = true;
+      } else {
+        console.warn(`    Force-translate failed for paragraph ${idx}: ${e.message?.slice(0, 60)}`);
+      }
     }
   }
 
