@@ -450,7 +450,7 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
   // Track API response times to adjust batch size
   let lastBatchTime = 0;
 
-  const CONCURRENCY = 5; // Paid API key - run 5 batches in parallel
+  let CONCURRENCY = 3; // Start conservative to avoid 429 rate limits (1M tokens/min quota)
 
   const translated = new Array(paragraphs.length).fill('');
 
@@ -595,6 +595,13 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
         }
       }
     }));
+
+    // Rate limit protection: pause between batch windows for large documents
+    // Gemini has 1M tokens/min limit. Each batch of 30 paragraphs ~ 15K tokens.
+    // 3 concurrent batches = ~45K tokens. Pause 2s between windows to stay under limit.
+    if (totalBatches > 10 && w + CONCURRENCY < totalBatches) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
   }
 
   // Store new translations in cache (background — non-blocking)

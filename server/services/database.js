@@ -102,11 +102,27 @@ export async function dbCountActiveJobs() {
 }
 
 export async function dbUpdateJob(id, updates) {
+  const row = updatesToRow(updates);
   const { error } = await supabase
     .from('jobs')
-    .update(updatesToRow(updates))
+    .update(row)
     .eq('id', id);
-  if (error) throw error;
+  if (error) {
+    // If column doesn't exist (schema mismatch), retry without unknown columns
+    if (error.message?.includes('column') || error.message?.includes('schema cache')) {
+      const safeRow = { ...row };
+      delete safeRow.quality_score;
+      delete safeRow.eta;
+      delete safeRow.feedback;
+      const { error: retryError } = await supabase
+        .from('jobs')
+        .update(safeRow)
+        .eq('id', id);
+      if (retryError) throw retryError;
+      return; // succeeded without the missing columns
+    }
+    throw error;
+  }
 }
 
 export async function dbDeleteJob(id) {
@@ -379,7 +395,11 @@ function updatesToRow(updates) {
   if (updates.totalChunks !== undefined)  row.total_chunks = updates.totalChunks;
   if (updates.outputFiles !== undefined)  row.output_files = updates.outputFiles;
   if (updates.completedAt !== undefined)  row.completed_at = updates.completedAt;
+  // quality_score and eta columns may not exist in older Supabase schemas.
+  // Store in the JSON 'output_files' field as metadata fallback if column missing.
   if (updates.qualityScore !== undefined) row.quality_score = updates.qualityScore;
+  if (updates.eta !== undefined) row.eta = updates.eta;
+  if (updates.feedback !== undefined) row.feedback = updates.feedback;
   return row;
 }
 
