@@ -9,6 +9,8 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch, isAdmin }) {
   const [deleting, setDeleting] = useState(null);
   const [cancellingId, setCancellingId] = useState(null);
   const [previewJob, setPreviewJob] = useState(null);
+  const [jobPage, setJobPage] = useState(0);
+  const JOBS_PER_PAGE = 50;
 
   const completedJobs  = jobs.filter(j => j.status === 'completed');
   const failedJobs     = jobs.filter(j => j.status === 'failed');
@@ -223,7 +225,7 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch, isAdmin }) {
           </div>
         ) : (
           <ul className="divide-y divide-slate-100">
-            {jobs.map(job => {
+            {jobs.slice(jobPage * JOBS_PER_PAGE, (jobPage + 1) * JOBS_PER_PAGE).map(job => {
               const cfg = statusConfig[job.status] || statusConfig.processing;
               const previewUrl = job.outputFiles?.find(f => f.format === 'preview')?.url;
               return (
@@ -295,12 +297,36 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch, isAdmin }) {
             })}
           </ul>
         )}
+
+        {/* Pagination */}
+        {jobs.length > JOBS_PER_PAGE && (
+          <div className="flex items-center justify-between px-5 py-3 border-t border-slate-100">
+            <button
+              onClick={() => setJobPage(p => Math.max(0, p - 1))}
+              disabled={jobPage === 0}
+              className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-800 disabled:text-slate-300 disabled:cursor-not-allowed px-3 py-1.5 border border-slate-200 rounded-lg transition"
+            >
+              Previous
+            </button>
+            <span className="text-xs text-slate-500">
+              Page {jobPage + 1} of {Math.ceil(jobs.length / JOBS_PER_PAGE)}
+            </span>
+            <button
+              onClick={() => setJobPage(p => p + 1)}
+              disabled={(jobPage + 1) * JOBS_PER_PAGE >= jobs.length}
+              className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-800 disabled:text-slate-300 disabled:cursor-not-allowed px-3 py-1.5 border border-slate-200 rounded-lg transition"
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Preview modal */}
       {previewJob && (
         <SideBySidePreview
           previewUrl={previewJob.outputFiles?.find(f => f.format === 'preview')?.url}
+          jobId={previewJob.id}
           onClose={() => setPreviewJob(null)}
           onDownload={() => handleDownload(previewJob)}
         />

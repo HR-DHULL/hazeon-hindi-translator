@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Search, ChevronLeft, ChevronRight, Download, Eye, AlertTriangle, CheckCircle, Filter } from 'lucide-react';
+import { X, Search, ChevronLeft, ChevronRight, Download, Eye, AlertTriangle, CheckCircle, Filter, MessageSquare } from 'lucide-react';
+import FeedbackForm from './FeedbackForm.jsx';
 
 function QualityBadge({ score }) {
   if (score >= 95) return <span className="text-xs font-medium text-green-700 bg-green-50 border border-green-100 px-1.5 py-0.5 rounded-full">{score}</span>;
@@ -7,7 +8,7 @@ function QualityBadge({ score }) {
   return <span className="text-xs font-medium text-red-700 bg-red-50 border border-red-100 px-1.5 py-0.5 rounded-full">{score}</span>;
 }
 
-function SideBySidePreview({ previewUrl, onClose, onDownload }) {
+function SideBySidePreview({ previewUrl, onClose, onDownload, jobId }) {
   const [data, setData] = useState(null);
   const [quality, setQuality] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -15,6 +16,7 @@ function SideBySidePreview({ previewUrl, onClose, onDownload }) {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [filterMode, setFilterMode] = useState('all'); // all | issues
+  const [feedbackIndex, setFeedbackIndex] = useState(null);
 
   const PAGE_SIZE = 30;
 
@@ -201,8 +203,24 @@ function SideBySidePreview({ previewUrl, onClose, onDownload }) {
                     </div>
                   )}
                 </div>
-                <div className="px-3 py-3 border-l border-slate-100 w-16 flex items-start justify-center">
+                <div className="px-3 py-3 border-l border-slate-100 w-16 flex flex-col items-center gap-1.5 relative">
                   {hasScore && <QualityBadge score={pair.score} />}
+                  <button
+                    onClick={() => setFeedbackIndex(feedbackIndex === (page * PAGE_SIZE + i) ? null : (page * PAGE_SIZE + i))}
+                    className="text-slate-300 hover:text-blue-500 transition-colors"
+                    title="Give feedback on this translation"
+                  >
+                    <MessageSquare size={14} />
+                  </button>
+                  {feedbackIndex === (page * PAGE_SIZE + i) && (
+                    <div className="absolute right-0 top-full z-10 mt-1">
+                      <FeedbackForm
+                        jobId={jobId}
+                        paragraphIndex={page * PAGE_SIZE + i}
+                        onClose={() => setFeedbackIndex(null)}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             );

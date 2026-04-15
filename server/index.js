@@ -27,6 +27,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import translateRouter from './routes/translate.js';
 import authRouter from './routes/auth.js';
+import { requestLogger } from './middleware/logger.js';
 
 let __dirname = '/app';
 try { __dirname = path.dirname(fileURLToPath(import.meta.url)); } catch {}
@@ -43,30 +44,42 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ── CORS: restrict to allowed origins ─────────────────────────────────────
-// Priority: ALLOWED_ORIGINS env var → Vercel deployment URL → dev wildcard
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
-  : process.env.VERCEL_URL
-    ? [`https://${process.env.VERCEL_URL}`, 'https://hazeon-hindi-translator.vercel.app']
-    : null; // null = wildcard in dev only
+// Priority: ALLOWED_ORIGINS env var → Vercel deployment URL → dev localhost
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
-if (!allowedOrigins && process.env.NODE_ENV === 'production') {
-  console.warn('WARNING: ALLOWED_ORIGINS is not set in production. Set it to your frontend URL to restrict CORS.');
+let allowedOrigins;
+if (process.env.ALLOWED_ORIGINS) {
+  allowedOrigins = process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+} else if (IS_PRODUCTION) {
+  // Production without ALLOWED_ORIGINS: warn but allow Render/Vercel domains
+  console.warn('WARNING: ALLOWED_ORIGINS is not set in production. CORS is restricted to known deploy domains only. Set ALLOWED_ORIGINS to your frontend URL(s).');
+  allowedOrigins = [];
+  if (process.env.VERCEL_URL) allowedOrigins.push(`https://${process.env.VERCEL_URL}`);
+  if (process.env.RENDER_EXTERNAL_URL) allowedOrigins.push(process.env.RENDER_EXTERNAL_URL);
+  allowedOrigins.push('https://hazeon-hindi-translator.vercel.app');
+} else {
+  // Development: allow localhost origins
+  allowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
+  ];
 }
 
 app.use(cors({
-  origin: allowedOrigins
-    ? function (origin, cb) {
-        // Allow server-to-server (no origin) or whitelisted origins
-        if (!origin || allowedOrigins.includes(origin)) cb(null, true);
-        else cb(new Error('Not allowed by CORS'));
-      }
-    : '*', // dev only
-  credentials: !!allowedOrigins,
+  origin: function (origin, cb) {
+    // Allow server-to-server (no origin) or whitelisted origins
+    if (!origin || allowedOrigins.includes(origin)) cb(null, true);
+    else cb(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: false }));
+app.use(requestLogger);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -108,13 +121,35 @@ if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
 }
 
 // Only start a listening server in local development — not in Netlify/Vercel serverless
+let server = null;
 if (!process.env.NETLIFY && !process.env.VERCEL && !process.env.NETLIFY_DEV) {
   const PORT = process.env.PORT || 3001;
   const engine = `Google Gemini (${process.env.GEMINI_MODEL || 'gemini-2.5-flash'})`;
-  app.listen(PORT, () => {
+  server = app.listen(PORT, () => {
     console.log(`\n  UPSC Hindi Translator running on http://localhost:${PORT}`);
     console.log(`  Translation engine: ${engine}\n`);
   });
 }
 
 export default app;
+
+// ── Graceful Shutdown ─────────────────────────────────────────────────────────
+function gracefulShutdown(signal) {
+  console.log(`\n  ${signal} received. Shutting down gracefully...`);
+  if (server) {
+    server.close(() => {
+      console.log('  Server closed. Exiting.');
+      process.exit(0);
+    });
+    // Force exit after 30 seconds
+    setTimeout(() => {
+      console.warn('  Forced exit after 30s timeout.');
+      process.exit(1);
+    }, 30000);
+  } else {
+    process.exit(0);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

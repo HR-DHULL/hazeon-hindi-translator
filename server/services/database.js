@@ -28,21 +28,35 @@ export async function dbGetJob(id) {
   return rowToJob(data);
 }
 
-export async function dbGetAllJobs(userId = null) {
+export async function dbGetAllJobs(userId = null, role = 'user', { limit = 50, offset = 0 } = {}) {
   if (userId) {
     // Regular user — fetch only their jobs
     const { data, error } = await supabase
       .from('jobs').select('*')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
     if (error) throw error;
-    return (data || []).map(rowToJob);
+
+    // Get total count for pagination
+    const { count } = await supabase
+      .from('jobs')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId);
+
+    return { jobs: (data || []).map(rowToJob), total: count || 0 };
   }
   // Admin — fetch all jobs + user info
   const { data: jobRows, error } = await supabase
     .from('jobs').select('*')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
   if (error) throw error;
+
+  // Get total count for pagination
+  const { count } = await supabase
+    .from('jobs')
+    .select('*', { count: 'exact', head: true });
 
   // Fetch user profiles to map user_id → name/email
   const userIds = [...new Set((jobRows || []).map(j => j.user_id).filter(Boolean))];
@@ -58,7 +72,7 @@ export async function dbGetAllJobs(userId = null) {
     } catch {}
   }
 
-  return (jobRows || []).map(row => {
+  const jobs = (jobRows || []).map(row => {
     const job = rowToJob(row);
     const user = userMap[row.user_id];
     if (user) {
@@ -67,6 +81,8 @@ export async function dbGetAllJobs(userId = null) {
     }
     return job;
   });
+
+  return { jobs, total: count || 0 };
 }
 
 export async function dbCreateJob(job) {

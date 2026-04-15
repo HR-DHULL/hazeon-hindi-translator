@@ -25,6 +25,7 @@ function FileUpload({ onUploadComplete }) {
   const [error, setError] = useState('');
   const [pdfWarning, setPdfWarning] = useState(false);
   const [bookContext, setBookContext] = useState('');
+  const [subject, setSubject] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef(null);
 
@@ -57,11 +58,11 @@ function FileUpload({ onUploadComplete }) {
 
   const validateFile = (file) => {
     const ext = '.' + file.name.split('.').pop().toLowerCase();
-    if (ext === '.pdf' || ext === '.txt') {
+    if (ext === '.txt') {
       setPdfWarning(true);
-      return `${file.name}: Only DOCX files are supported.`;
+      return `${file.name}: Only DOCX and PDF files are supported.`;
     }
-    if (ext !== '.docx') return `${file.name}: Unsupported file type ${ext}.`;
+    if (ext !== '.docx' && ext !== '.pdf') return `${file.name}: Unsupported file type ${ext}.`;
     if (file.size > 100 * 1024 * 1024) return `${file.name}: File too large (max 100MB).`;
     return null;
   };
@@ -81,11 +82,18 @@ function FileUpload({ onUploadComplete }) {
     if (errors.length) setError(errors.join(' '));
     if (newFiles.length) {
       setSelectedFiles(prev => [...prev, ...newFiles]);
-      // Read actual page counts from DOCX metadata in background
+      // Read actual page counts from file metadata in background
       for (const file of newFiles) {
-        readDocxPageCount(file).then(count => {
-          setPageEstimates(prev => ({ ...prev, [file.name + file.size]: count }));
-        });
+        const ext = '.' + file.name.split('.').pop().toLowerCase();
+        if (ext === '.pdf') {
+          // For PDFs, estimate pages from file size (~50KB per page typical)
+          const estimatedPages = Math.max(1, Math.ceil(file.size / 50000));
+          setPageEstimates(prev => ({ ...prev, [file.name + file.size]: estimatedPages }));
+        } else {
+          readDocxPageCount(file).then(count => {
+            setPageEstimates(prev => ({ ...prev, [file.name + file.size]: count }));
+          });
+        }
       }
     }
   };
@@ -122,7 +130,7 @@ function FileUpload({ onUploadComplete }) {
         const prepRes = await authFetch('/api/translate/prepare', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: file.name, bookContext: bookContext.trim() }),
+          body: JSON.stringify({ filename: file.name, bookContext: bookContext.trim(), ...(subject ? { subject } : {}) }),
         });
         if (!prepRes.ok) {
           const d = await prepRes.json();
@@ -197,7 +205,7 @@ function FileUpload({ onUploadComplete }) {
         <div className="px-6 py-5 border-b border-slate-100">
           <h2 className="text-lg font-bold text-slate-900">Upload Documents for Translation</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Upload one or more English UPSC/HCS DOCX files — formatting fully preserved in Hindi output
+            Upload one or more English UPSC/HCS DOCX or PDF files — formatting fully preserved in Hindi output
           </p>
         </div>
 
@@ -207,7 +215,7 @@ function FileUpload({ onUploadComplete }) {
           <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3">
             <Info size={15} className="text-indigo-500 mt-0.5 shrink-0" />
             <p className="text-xs text-indigo-700">
-              Only <strong>.docx</strong> files are accepted. You can select multiple files at once. Formatting is preserved in output.
+              <strong>.docx</strong> and <strong>.pdf</strong> files are accepted. You can select multiple files at once. Formatting is preserved in output.
             </p>
           </div>
 
@@ -229,7 +237,7 @@ function FileUpload({ onUploadComplete }) {
             <input
               ref={inputRef}
               type="file"
-              accept=".docx"
+              accept=".docx,.pdf"
               multiple
               onChange={(e) => {
                 if (e.target.files?.length) addFiles(Array.from(e.target.files));
@@ -277,9 +285,9 @@ function FileUpload({ onUploadComplete }) {
                   <Upload size={22} className="text-slate-400" />
                 </div>
                 <p className="text-sm font-medium text-slate-700">
-                  Drag &amp; drop your DOCX files, or <span className="text-indigo-600">browse</span>
+                  Drag &amp; drop your DOCX or PDF files, or <span className="text-indigo-600">browse</span>
                 </p>
-                <p className="text-xs text-slate-400 mt-1">DOCX only · Select multiple files · Best accuracy: under 30 pages each · max 100MB</p>
+                <p className="text-xs text-slate-400 mt-1">DOCX & PDF · Select multiple files · Best accuracy: under 30 pages each · max 100MB</p>
               </div>
             )}
           </div>
@@ -304,6 +312,25 @@ function FileUpload({ onUploadComplete }) {
               <p className="text-xs text-red-700">{error}</p>
             </div>
           )}
+
+          {/* Subject hint */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-slate-700">Subject (optional)</label>
+            <select
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent"
+            >
+              <option value="">Auto-detect</option>
+              <option value="polity">Polity & Governance</option>
+              <option value="economics">Economics & Finance</option>
+              <option value="history">History</option>
+              <option value="geography">Geography</option>
+              <option value="science">Science & Technology</option>
+              <option value="environment">Environment & Ecology</option>
+            </select>
+            <p className="text-xs text-slate-400">Helps select the right terminology glossary</p>
+          </div>
 
           {/* Book context */}
           <div className="space-y-2">

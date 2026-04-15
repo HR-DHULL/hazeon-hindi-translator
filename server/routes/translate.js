@@ -54,6 +54,15 @@ const statusLimiter = rateLimit({
   message: { error: 'Too many status requests. Please slow down.' },
 });
 
+// General rate limiter for all other endpoints: 60 req/min per IP
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down.' },
+});
+
 // Use /tmp in production (Netlify, Render serverless), local path in dev
 const IS_PROD = process.env.NODE_ENV === 'production';
 const OUTPUT_DIR = IS_PROD ? '/tmp/output' : path.join(__dirname, '..', 'uploads', 'output');
@@ -316,6 +325,64 @@ router.get('/status/:jobId', statusLimiter, requireAuth, async (req, res) => {
   }
 });
 
+// ── SSE Real-Time Progress Stream ────────────────────────────────────────────
+// Replaces polling with server-push. Frontend uses EventSource API.
+// Falls back to polling /status/:jobId if SSE is not supported.
+router.get('/stream/:jobId', requireAuth, (req, res) => {
+  const { jobId } = req.params;
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no', // Disable Nginx buffering (Render uses Nginx)
+  });
+
+  // Send initial connection event
+  res.write(`event: connected\ndata: ${JSON.stringify({ jobId })}\n\n`);
+
+  let closed = false;
+  const interval = setInterval(async () => {
+    if (closed) return;
+    try {
+      const job = await dbGetJob(jobId);
+      if (!job) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: 'Job not found' })}\n\n`);
+        cleanup();
+        return;
+      }
+
+      const payload = {
+        status: job.status,
+        progress: job.progress,
+        message: job.message,
+        eta: job.eta || null,
+        qualityScore: job.qualityScore || null,
+        outputFiles: job.outputFiles || null,
+        cloudUrl: job.cloudUrl || null,
+      };
+
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+
+      // Close stream when job is done
+      if (['completed', 'failed', 'cancelled'].includes(job.status)) {
+        res.write(`event: done\ndata: ${JSON.stringify(payload)}\n\n`);
+        cleanup();
+      }
+    } catch (e) {
+      // Silently continue on transient DB errors
+    }
+  }, 2000);
+
+  function cleanup() {
+    closed = true;
+    clearInterval(interval);
+    res.end();
+  }
+
+  req.on('close', cleanup);
+});
+
 // ─── GET /api/translate/download/:jobId ──────────────────────────────────────
 router.get('/download/:jobId', requireAuth, async (req, res) => {
   try {
@@ -393,13 +460,17 @@ router.get('/signed-upload-url/:jobId', requireAuth, async (req, res) => {
 });
 
 // ─── GET /api/translate/jobs ──────────────────────────────────────────────────
-router.get('/jobs', requireAuth, async (req, res) => {
+router.get('/jobs', generalLimiter, requireAuth, async (req, res) => {
   try {
-    const jobs = await dbGetAllJobs(req.user.role === 'admin' ? null : req.user.id);
-    res.json(jobs);
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const offset = parseInt(req.query.offset) || 0;
+    const userId = req.user.role === 'admin' ? null : req.user.id;
+    const role = req.user.role;
+    const result = await dbGetAllJobs(userId, role, { limit, offset });
+    res.json({ jobs: result.jobs, total: result.total, limit, offset });
   } catch (err) {
     console.error('Failed to load jobs:', err.message);
-    res.json([]);
+    res.json({ jobs: [], total: 0, limit: 50, offset: 0 });
   }
 });
 
@@ -473,7 +544,7 @@ router.post('/share/:jobId', requireAuth, async (req, res) => {
 });
 
 // ── Translation Feedback ─────────────────────────────────────────────────
-router.post('/feedback', requireAuth, async (req, res) => {
+router.post('/feedback', generalLimiter, requireAuth, async (req, res) => {
   try {
     const { jobId, paragraphIndex, rating, comment } = req.body;
     if (!jobId || paragraphIndex === undefined || !rating) {
@@ -534,7 +605,7 @@ router.get('/cache/stats', requireAuth, requireAdmin, async (req, res) => {
 
 // ─── Custom Glossary CRUD ────────────────────────────────────────────────────
 
-router.get('/glossary', requireAuth, async (req, res) => {
+router.get('/glossary', generalLimiter, requireAuth, async (req, res) => {
   try {
     const terms = await dbGetGlossary(req.user.id);
     res.json(terms);
@@ -543,7 +614,7 @@ router.get('/glossary', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/glossary', requireAuth, async (req, res) => {
+router.post('/glossary', generalLimiter, requireAuth, async (req, res) => {
   const { terms } = req.body; // [{ english_term, hindi_term }]
   if (!Array.isArray(terms) || terms.length === 0) {
     return res.status(400).json({ error: 'terms array is required' });
@@ -567,7 +638,7 @@ router.post('/glossary', requireAuth, async (req, res) => {
   }
 });
 
-router.delete('/glossary/:id', requireAuth, async (req, res) => {
+router.delete('/glossary/:id', generalLimiter, requireAuth, async (req, res) => {
   try {
     await dbDeleteGlossaryTerm(req.user.id, req.params.id);
     res.json({ message: 'Term deleted' });
@@ -576,7 +647,7 @@ router.delete('/glossary/:id', requireAuth, async (req, res) => {
   }
 });
 
-router.delete('/glossary', requireAuth, async (req, res) => {
+router.delete('/glossary', generalLimiter, requireAuth, async (req, res) => {
   try {
     await dbClearGlossary(req.user.id);
     res.json({ message: 'All custom terms deleted' });
@@ -589,7 +660,7 @@ router.delete('/glossary', requireAuth, async (req, res) => {
 // Paste-text mode: translate plain text to Hindi, return translated text directly.
 // No DOCX, no file upload, no page limits.
 
-router.post('/text', requireAuth, async (req, res) => {
+router.post('/text', generalLimiter, requireAuth, async (req, res) => {
   const { text, bookContext } = req.body || {};
   if (!text || typeof text !== 'string' || !text.trim()) {
     return res.status(400).json({ error: 'No text provided' });

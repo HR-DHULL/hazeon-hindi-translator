@@ -221,6 +221,14 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
                 style={{ width: `${progress}%` }}
               />
             </div>
+            {job.eta && job.status === 'processing' && (
+              <p className="text-xs text-slate-400 mt-1.5">
+                {job.eta > 60
+                  ? `~${Math.floor(job.eta / 60)} min ${job.eta % 60} sec remaining`
+                  : `~${job.eta} sec remaining`
+                }
+              </p>
+            )}
           </div>
 
           {/* Chunk progress (when chunking) */}
@@ -407,6 +415,7 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
       {showPreview && previewUrl && (
         <SideBySidePreview
           previewUrl={previewUrl}
+          jobId={job.id}
           onClose={() => setShowPreview(false)}
           onDownload={handleDownload}
         />
