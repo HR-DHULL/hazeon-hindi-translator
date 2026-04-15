@@ -6,10 +6,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 # Install client dependencies and build frontend
-COPY client/package.json client/package-lock.json ./client/
-RUN cd client && npm ci
 COPY client/ ./client/
-RUN cd client && npm run build && rm -rf node_modules
+RUN cd client && npm install && npm run build && rm -rf node_modules
 
 # Copy server code
 COPY server/ ./server/
