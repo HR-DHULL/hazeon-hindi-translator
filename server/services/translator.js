@@ -443,14 +443,17 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 // ── Gemini paragraph translation (batched, parallel, with translation memory) ─
 async function translateParagraphsBatched(paragraphs, onProgress) {
   // Dynamic batch size - starts at 30, reduces on API failures
-  let BATCH_SIZE = 30;
+  // Adaptive batch size: smaller for large docs to prevent OOM and rate limits
+  let BATCH_SIZE = paragraphs.length > 1000 ? 15 : paragraphs.length > 500 ? 20 : 30;
   const MIN_BATCH = 10;
-  const MAX_BATCH = 50;
+  const MAX_BATCH = 40;
 
   // Track API response times to adjust batch size
   let lastBatchTime = 0;
 
-  let CONCURRENCY = 3; // Start conservative to avoid 429 rate limits (1M tokens/min quota)
+  // Adaptive concurrency: lower for large docs to prevent OOM + 429 rate limits
+  // 512MB Render free tier: 3000 paragraphs in memory = ~200MB, needs headroom
+  let CONCURRENCY = paragraphs.length > 1000 ? 1 : paragraphs.length > 500 ? 2 : 3;
 
   const translated = new Array(paragraphs.length).fill('');
 
@@ -597,10 +600,10 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
     }));
 
     // Rate limit protection: pause between batch windows for large documents
-    // Gemini has 1M tokens/min limit. Each batch of 30 paragraphs ~ 15K tokens.
-    // 3 concurrent batches = ~45K tokens. Pause 2s between windows to stay under limit.
-    if (totalBatches > 10 && w + CONCURRENCY < totalBatches) {
-      await new Promise(r => setTimeout(r, 2000));
+    // Gemini has 1M tokens/min limit. Longer pause for bigger docs.
+    if (totalBatches > 5 && w + CONCURRENCY < totalBatches) {
+      const pauseMs = uncachedTexts.length > 1000 ? 5000 : uncachedTexts.length > 500 ? 3000 : 2000;
+      await new Promise(r => setTimeout(r, pauseMs));
     }
   }
 
