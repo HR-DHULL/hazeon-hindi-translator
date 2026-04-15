@@ -149,17 +149,27 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
       }
     });
 
-    // CRITICAL: Ensure translated array has EXACTLY the same length as source paragraphs.
-    // If translation fails midway (API errors, timeouts), the array can be shorter,
-    // causing paragraph misalignment in the DOCX output (text in wrong positions/missing).
-    if (translatedParagraphs.length < paragraphs.length) {
-      console.warn(`  WARNING: Translated ${translatedParagraphs.length}/${paragraphs.length} paragraphs. Padding with originals.`);
-      for (let i = translatedParagraphs.length; i < paragraphs.length; i++) {
+    // CRITICAL: Ensure every paragraph has a translation. Never leave empty strings.
+    // The translated array is pre-allocated with fill('') - if a batch fails,
+    // those entries stay as '' which makes text disappear in the DOCX output.
+    // Fix: replace any empty/missing translations with the original English text.
+    let emptyCount = 0;
+    for (let i = 0; i < paragraphs.length; i++) {
+      if (i >= translatedParagraphs.length) {
         translatedParagraphs.push(paragraphs[i]);
+        emptyCount++;
+      } else if (!translatedParagraphs[i] || !translatedParagraphs[i].trim()) {
+        if (paragraphs[i]?.trim()) {
+          translatedParagraphs[i] = paragraphs[i]; // keep original instead of blank
+          emptyCount++;
+        }
       }
-    } else if (translatedParagraphs.length > paragraphs.length) {
-      console.warn(`  WARNING: Got ${translatedParagraphs.length} translations for ${paragraphs.length} paragraphs. Trimming.`);
+    }
+    if (translatedParagraphs.length > paragraphs.length) {
       translatedParagraphs.length = paragraphs.length;
+    }
+    if (emptyCount > 0) {
+      console.warn(`  WARNING: ${emptyCount} paragraphs had empty translations - filled with original English text.`);
     }
 
     // Apply user's custom glossary overrides on top of translated text

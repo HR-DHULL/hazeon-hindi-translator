@@ -148,12 +148,19 @@ function replaceParagraphTexts(xml, translatedParagraphs) {
       let translatedLine = translatedParagraphs[paraIndex];
       paraIndex++;
 
-      // Safety: strip any §§ placeholder and <<<PN>>> marker artifacts before writing to DOCX
-      if (translatedLine) {
-        translatedLine = translatedLine.replace(/§\s*§?\s*\d+\s*§?\s*§/g, '');
-        translatedLine = translatedLine.replace(/<<<P?\d+>>>/g, '');
-        // Strip leading/trailing newlines that can create empty <w:t> elements
-        translatedLine = translatedLine.replace(/^\n+|\n+$/g, '').trim();
+      // SAFETY: Never replace text with empty string - keep original if translation is blank
+      if (!translatedLine || !translatedLine.trim()) {
+        return pBlock; // keep original paragraph unchanged
+      }
+
+      // Strip any §§ placeholder and <<<PN>>> marker artifacts before writing to DOCX
+      translatedLine = translatedLine.replace(/§\s*§?\s*\d+\s*§?\s*§/g, '');
+      translatedLine = translatedLine.replace(/<<<P?\d+>>>/g, '');
+      translatedLine = translatedLine.replace(/^\n+|\n+$/g, '').trim();
+
+      // Double-check after cleanup - if stripping left it empty, keep original
+      if (!translatedLine) {
+        return pBlock;
       }
 
       // If this paragraph uses Word's automatic list numbering (<w:numPr>), the letter
