@@ -149,6 +149,19 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
       }
     });
 
+    // CRITICAL: Ensure translated array has EXACTLY the same length as source paragraphs.
+    // If translation fails midway (API errors, timeouts), the array can be shorter,
+    // causing paragraph misalignment in the DOCX output (text in wrong positions/missing).
+    if (translatedParagraphs.length < paragraphs.length) {
+      console.warn(`  WARNING: Translated ${translatedParagraphs.length}/${paragraphs.length} paragraphs. Padding with originals.`);
+      for (let i = translatedParagraphs.length; i < paragraphs.length; i++) {
+        translatedParagraphs.push(paragraphs[i]);
+      }
+    } else if (translatedParagraphs.length > paragraphs.length) {
+      console.warn(`  WARNING: Got ${translatedParagraphs.length} translations for ${paragraphs.length} paragraphs. Trimming.`);
+      translatedParagraphs.length = paragraphs.length;
+    }
+
     // Apply user's custom glossary overrides on top of translated text
     if (customGlossary.length > 0) {
       for (let i = 0; i < translatedParagraphs.length; i++) {
