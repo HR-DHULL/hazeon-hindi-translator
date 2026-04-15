@@ -70,9 +70,13 @@ if (process.env.ALLOWED_ORIGINS) {
 
 app.use(cors({
   origin: function (origin, cb) {
-    // Allow server-to-server (no origin) or whitelisted origins
-    if (!origin || allowedOrigins.includes(origin)) cb(null, true);
-    else cb(new Error('Not allowed by CORS'));
+    // Allow: no origin (server-to-server, same-origin), whitelisted origins,
+    // or any *.onrender.com / *.vercel.app domain (deployment previews)
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    if (/\.(onrender\.com|vercel\.app)$/.test(origin)) return cb(null, true);
+    if (!IS_PRODUCTION) return cb(null, true); // allow all in dev
+    console.warn(`CORS blocked: ${origin}`);
+    cb(new Error('Not allowed by CORS'));
   },
   credentials: true,
 }));
