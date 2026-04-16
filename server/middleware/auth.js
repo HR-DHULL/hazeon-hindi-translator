@@ -84,12 +84,17 @@ export async function requireAuth(req, res, next) {
     req.user = {
       id: user.id,
       email: user.email,
-      fullName: profile?.full_name || '',
+      fullName: profile?.full_name || user.user_metadata?.full_name || '',
       role:       profile?.role        ?? appMeta.role       ?? 'user',
       plan:       profile?.plan        ?? appMeta.plan       ?? 'free',
       pagesUsed:  profile?.pages_used  ?? appMeta.pages_used ?? fallbackLimit,
       pagesLimit: profile?.pages_limit ?? fallbackLimit,
     };
+
+    // Log role detection for debugging
+    if (!profile) {
+      console.warn(`  Auth: profile fetch failed for ${user.id?.slice(0,8)}, role=${req.user.role} (fallback)`);
+    }
 
     setCachedUser(token, req.user);
     next();
