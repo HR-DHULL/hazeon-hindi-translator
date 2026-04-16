@@ -196,7 +196,7 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
 
   const systemPrompt = buildSystemPrompt(detectedSubject, fullText);
 
-  const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each paragraph below from English to Hindi for UPSC/HCS exam material. Each paragraph starts with <<<PN>>> (e.g., <<<P1>>>, <<<P2>>>). Preserve that exact prefix in your output.\n\nCRITICAL: Translate EVERY English word/sentence into Hindi. Do NOT leave ANY complete English sentence or question untranslated. The only allowed English in output: acronyms (UPSC, GDP, RBI...), MCQ labels (a)(b)(c)(d), single-letter variables, numbers, and math formulas.\n\n${numbered}`;
+  const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each paragraph below from English to Hindi for UPSC/HCS exam material. Each paragraph starts with <<<PN>>> (e.g., <<<P1>>>, <<<P2>>>). Preserve that exact prefix in your output. Output ALL paragraphs with their <<<PN>>> prefix - do not skip any.\n\nCRITICAL RULES:\n1. Translate EVERY paragraph, even short ones like "Primary Market Growth" or "Govt Healthcare Spending".\n2. Do NOT leave ANY English text untranslated. Even single-word headings must be translated.\n3. The only allowed English: acronyms (UPSC, GDP, RBI...), MCQ labels (a)(b)(c)(d), single-letter variables, numbers.\n4. You MUST output exactly ${paragraphs.length} paragraphs with <<<P1>>> through <<<P${paragraphs.length}>>> prefixes.\n\n${numbered}`;
 
   const timeoutMs = 90000;
   const controller = new AbortController();
@@ -206,7 +206,7 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
     const response = await openai.chat.completions.create({
       model: OPENAI_MODEL,
       temperature: 0.1,
-      max_tokens: 16000,
+      max_tokens: 32000,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMsg },
@@ -438,18 +438,36 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
   }
 
   if (identicalIndices.length > 0) {
-    const cap = Math.min(identicalIndices.length, 30);
-    console.log(`  Identical-to-original check: ${identicalIndices.length} paragraphs unchanged, retranslating ${cap}...`);
-    for (let j = 0; j < cap; j++) {
-      const idx = identicalIndices[j];
+    console.log(`  Identical-to-original check: ${identicalIndices.length} paragraphs unchanged. Retranslating ALL in batches...`);
+
+    // Batch the retranslations (10 at a time) instead of one-by-one
+    for (let b = 0; b < identicalIndices.length; b += 10) {
+      const batchIndices = identicalIndices.slice(b, b + 10);
+      const batchTexts = batchIndices.map(i => cleanedParagraphs[i]);
       try {
-        const fixed = await forceTranslateSingle(cleanedParagraphs[idx]);
-        if (fixed && fixed.trim() && fixed.trim() !== cleanedParagraphs[idx].trim()) {
-          verified[idx] = fixed;
+        const results = await translateWithOpenAI(batchTexts);
+        for (let j = 0; j < batchIndices.length; j++) {
+          const idx = batchIndices[j];
+          if (results[j] && results[j].trim() && results[j].trim() !== cleanedParagraphs[idx].trim()) {
+            verified[idx] = results[j];
+          }
         }
-      } catch (_) {}
-      if (j % 5 === 4) await new Promise(r => setTimeout(r, 1000)); // pace
+      } catch (_) {
+        // Fallback: try individually
+        for (const idx of batchIndices) {
+          try {
+            const fixed = await forceTranslateSingle(cleanedParagraphs[idx]);
+            if (fixed && fixed.trim() && fixed.trim() !== cleanedParagraphs[idx].trim()) {
+              verified[idx] = fixed;
+            }
+          } catch (__) {}
+        }
+      }
+      await new Promise(r => setTimeout(r, 1000)); // pace
     }
+
+    const remaining = identicalIndices.filter(i => verified[i]?.trim() === cleanedParagraphs[i]?.trim()).length;
+    console.log(`  Fixed ${identicalIndices.length - remaining}/${identicalIndices.length} paragraphs`);
   }
 
   // Final safety: strip any §§N§§ placeholders and <<<PN>>> markers that survived the pipeline
@@ -470,7 +488,9 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
   // Dynamic batch size - starts at 30, reduces on API failures
   // Batch size: with filtered glossary, each call uses ~2K tokens instead of 17K
   // so we can use larger batches again
-  let BATCH_SIZE = paragraphs.length > 2000 ? 20 : 30;
+  // Smaller batches = each batch's Hindi output fits in max_tokens
+  // Hindi text is ~1.5x longer than English, so 20 paragraphs ~ 10K output tokens
+  let BATCH_SIZE = paragraphs.length > 2000 ? 15 : 20;
   const MIN_BATCH = 10;
   const MAX_BATCH = 40;
 
