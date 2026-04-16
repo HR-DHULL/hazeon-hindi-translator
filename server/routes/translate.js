@@ -467,7 +467,13 @@ router.get('/jobs', generalLimiter, requireAuth, async (req, res) => {
     const userId = req.user.role === 'admin' ? null : req.user.id;
     const role = req.user.role;
     const result = await dbGetAllJobs(userId, role, { limit, offset });
-    res.json({ jobs: result.jobs, total: result.total, limit, offset });
+    // Attach current user's name to their jobs (regular user path doesn't fetch profiles)
+    const jobs = result.jobs.map(job => ({
+      ...job,
+      userName: job.userName || req.user.fullName || req.user.email?.split('@')[0] || '',
+      userEmail: job.userEmail || req.user.email || '',
+    }));
+    res.json({ jobs, total: result.total, limit, offset });
   } catch (err) {
     console.error('Failed to load jobs:', err.message);
     res.json({ jobs: [], total: 0, limit: 50, offset: 0 });
