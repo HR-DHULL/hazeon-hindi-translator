@@ -12,7 +12,8 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+// gpt-4.1-mini: better translation quality than 4o-mini, similar speed, reasonable cost
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 if (openai) console.log(`  Translation engine: OpenAI ${OPENAI_MODEL} (UPSC/HCS mode)`);
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
@@ -206,7 +207,7 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
     const response = await openai.chat.completions.create({
       model: OPENAI_MODEL,
       temperature: 0.1,
-      max_tokens: 32000,
+      max_tokens: 16000,  // gpt-4o-mini max output is 16,384
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMsg },
@@ -488,9 +489,10 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
   // Dynamic batch size - starts at 30, reduces on API failures
   // Batch size: with filtered glossary, each call uses ~2K tokens instead of 17K
   // so we can use larger batches again
-  // Smaller batches = each batch's Hindi output fits in max_tokens
-  // Hindi text is ~1.5x longer than English, so 20 paragraphs ~ 10K output tokens
-  let BATCH_SIZE = paragraphs.length > 2000 ? 15 : 20;
+  // Batch size must ensure output fits in gpt-4o-mini's 16K token limit.
+  // Hindi text is ~1.5-2x longer than English in tokens.
+  // 15 paragraphs × ~500 tokens each = ~7,500 output tokens (safe margin).
+  let BATCH_SIZE = 15;
   const MIN_BATCH = 10;
   const MAX_BATCH = 40;
 
