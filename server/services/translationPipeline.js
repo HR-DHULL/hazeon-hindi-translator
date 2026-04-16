@@ -76,15 +76,10 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
         if (e.message && e.message.includes('Page limit')) {
           throw e;
         }
-        console.error('Page reservation failed:', e.message);
-        // Fallback: try simple increment if atomic reserve fails
-        try {
-          await dbIncrementPages(userId, pageCount);
-          pagesReserved = true;
-          console.log(`  Fallback page increment succeeded for ${userId}`);
-        } catch (incErr) {
-          console.error('Fallback page increment also failed:', incErr.message);
-        }
+        // Page tracking failed (non-fatal) - RPC functions may not exist in Supabase.
+        // Translation continues without page tracking.
+        console.warn('  Page tracking skipped (non-fatal):', e.message?.slice(0, 60));
+        pagesReserved = false;
       }
     }
 

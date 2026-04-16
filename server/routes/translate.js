@@ -464,8 +464,15 @@ router.get('/jobs', generalLimiter, requireAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 50, 100);
     const offset = parseInt(req.query.offset) || 0;
-    const userId = req.user.role === 'admin' ? null : req.user.id;
-    const role = req.user.role;
+
+    // IMPORTANT: Don't trust cached role for admin check.
+    // The JWT cache can have stale role='user' if profile fetch failed earlier.
+    // Hardcode known admin user IDs as fallback.
+    const ADMIN_IDS = ['78762cd1-8346-4937-a774-07c0b5fb162f']; // Harsh Dhull
+    const isAdmin = req.user.role === 'admin' || ADMIN_IDS.includes(req.user.id);
+    const userId = isAdmin ? null : req.user.id;
+    const role = isAdmin ? 'admin' : req.user.role;
+
     const result = await dbGetAllJobs(userId, role, { limit, offset });
     // Attach current user's name to their jobs (regular user path doesn't fetch profiles)
     const jobs = result.jobs.map(job => ({
