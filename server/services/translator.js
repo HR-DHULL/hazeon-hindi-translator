@@ -424,12 +424,41 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 
   const verified  = await verifyAndFixTranslations(cleanedParagraphs, translated, onProgress, examCitationIndices);
 
+  // ── Additional pass: catch paragraphs that are identical to original ──────
+  // verifyAndFixTranslations only checks for English sentences via regex.
+  // This catches short entries (table cells, headings) that were returned unchanged.
+  const identicalIndices = [];
+  for (let i = 0; i < cleanedParagraphs.length; i++) {
+    if (examCitationIndices.has(i)) continue;
+    const orig = cleanedParagraphs[i]?.trim();
+    const trans = verified[i]?.trim();
+    if (!orig || orig.length < 8) continue;
+    if (/^[\d\s\.\(\)\-,A-Z\/:%→%+]+$/.test(orig)) continue; // pure numbers/codes
+    if (trans === orig) identicalIndices.push(i);
+  }
+
+  if (identicalIndices.length > 0) {
+    const cap = Math.min(identicalIndices.length, 30);
+    console.log(`  Identical-to-original check: ${identicalIndices.length} paragraphs unchanged, retranslating ${cap}...`);
+    for (let j = 0; j < cap; j++) {
+      const idx = identicalIndices[j];
+      try {
+        const fixed = await forceTranslateSingle(cleanedParagraphs[idx]);
+        if (fixed && fixed.trim() && fixed.trim() !== cleanedParagraphs[idx].trim()) {
+          verified[idx] = fixed;
+        }
+      } catch (_) {}
+      if (j % 5 === 4) await new Promise(r => setTimeout(r, 1000)); // pace
+    }
+  }
+
   // Final safety: strip any §§N§§ placeholders and <<<PN>>> markers that survived the pipeline
-  const sanitized = verified.map(p => {
-    if (!p) return p;
+  const sanitized = verified.map((p, i) => {
+    // Never leave blank where original had text
+    if ((!p || !p.trim()) && cleanedParagraphs[i]?.trim()) return cleanedParagraphs[i];
     let clean = p.replace(/§\s*§?\s*\d+\s*§?\s*§/g, '');
     clean = clean.replace(/<<<P?\d+>>>/g, '');
-    return clean;
+    return clean || cleanedParagraphs[i] || '';
   });
   const withLabels = fixMissingMCQLabels(sanitized);
   // Post-process: re-attach answer lines that were separated before translation
