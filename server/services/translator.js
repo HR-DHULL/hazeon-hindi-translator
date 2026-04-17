@@ -216,13 +216,18 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
 
     clearTimeout(timer);
     var rawOutput = response.choices[0].message.content;
+    var finishReason = response.choices[0].finish_reason;
+
+    // Detect truncation - if output was cut off, log it
+    if (finishReason === 'length') {
+      console.warn(`  WARNING: Batch output truncated (hit max_tokens). Some paragraphs may be untranslated.`);
+    }
   } catch (err) {
     clearTimeout(timer);
     throw err;
   }
 
   // Sanitize: strip repeated character hallucinations (e.g. "享享享享" or "ड़ड़ड़ड़")
-  // LLMs sometimes output thousands of repeating characters.
   rawOutput = rawOutput.replace(/(.)\1{20,}/g, '$1');
 
   // Split on <<<P1>>>, <<<P2>>>... markers
@@ -496,10 +501,9 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
   // Dynamic batch size - starts at 30, reduces on API failures
   // Batch size: with filtered glossary, each call uses ~2K tokens instead of 17K
   // so we can use larger batches again
-  // Batch size must ensure output fits in gpt-4o-mini's 16K token limit.
-  // Hindi text is ~1.5-2x longer than English in tokens.
-  // 15 paragraphs × ~500 tokens each = ~7,500 output tokens (safe margin).
-  let BATCH_SIZE = 15;
+  // Batch size 10: guarantees output fits in gpt-4o-mini's 16K token limit.
+  // 15 was too large - output got truncated, leaving paragraphs untranslated.
+  let BATCH_SIZE = 10;
   const MIN_BATCH = 10;
   const MAX_BATCH = 40;
 
