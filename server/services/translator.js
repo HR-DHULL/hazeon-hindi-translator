@@ -12,8 +12,8 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-// gpt-4.1-mini: better translation quality than 4o-mini, similar speed, reasonable cost
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+// gpt-4o-mini: stable, no hallucination issues (gpt-4.1-mini had repeating char bugs)
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 if (openai) console.log(`  Translation engine: OpenAI ${OPENAI_MODEL} (UPSC/HCS mode)`);
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
@@ -221,13 +221,20 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
     throw err;
   }
 
-  // Split on <<<P1>>>, <<<P2>>>... markers (also match <<<1>>> without P — Gemini sometimes drops it)
+  // Sanitize: strip repeated character hallucinations (e.g. "享享享享" or "ड़ड़ड़ड़")
+  // LLMs sometimes output thousands of repeating characters.
+  rawOutput = rawOutput.replace(/(.)\1{20,}/g, '$1');
+
+  // Split on <<<P1>>>, <<<P2>>>... markers
   const parts = rawOutput.split(/\n*<<<P?(\d+)>>>\s*/);
   const parsed = Array(paragraphs.length).fill('');
   for (let i = 1; i < parts.length - 1; i += 2) {
     const idx = parseInt(parts[i], 10) - 1;
     if (idx >= 0 && idx < paragraphs.length) {
-      parsed[idx] = parts[i + 1].trim();
+      let text = parts[i + 1].trim();
+      // Strip any remaining repeated character patterns (hallucination)
+      text = text.replace(/(.)\1{15,}/g, '$1');
+      parsed[idx] = text;
     }
   }
 

@@ -20,7 +20,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const BATCH_SIZE = 40;
 const PAUSE_MS = 1000;  // 1s pause - OpenAI has much higher rate limits
-const MODEL = 'gpt-4.1-mini';
+const MODEL = 'gpt-4o-mini';
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_KEY) {
