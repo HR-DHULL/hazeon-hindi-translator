@@ -36,22 +36,28 @@ async function parseDOCX(filePath) {
     docStats = extractDocumentStats(docXml);
   }
 
-  // Try to read actual page count from DOCX metadata (docProps/app.xml)
-  let pageCount = null;
+  // Estimate page count from character count (~2000 chars per page for UPSC content)
+  // Don't trust docProps/app.xml metadata - it's often stale/wrong (e.g. shows 262
+  // pages for a 30-page file because metadata wasn't updated after editing).
+  const totalChars = result.value.length;
+  const estimatedPages = Math.max(1, Math.ceil(totalChars / 2000));
+
+  // Only use metadata if it's reasonably close to the estimate (within 3x)
+  let pageCount = estimatedPages;
   try {
     const appXmlFile = zip.file('docProps/app.xml');
     if (appXmlFile) {
       const appXml = await appXmlFile.async('string');
       const pagesMatch = appXml.match(/<Pages>(\d+)<\/Pages>/);
-      if (pagesMatch) pageCount = parseInt(pagesMatch[1], 10);
+      if (pagesMatch) {
+        const metaPages = parseInt(pagesMatch[1], 10);
+        // Use metadata only if it's within reasonable range of estimate
+        if (metaPages > 0 && metaPages < estimatedPages * 3 && metaPages > estimatedPages / 3) {
+          pageCount = metaPages;
+        }
+      }
     }
   } catch {}
-
-  // Fallback: estimate from character count (~2000 chars per page for UPSC content)
-  if (!pageCount || pageCount < 1) {
-    const totalChars = result.value.length;
-    pageCount = Math.max(1, Math.ceil(totalChars / 2000));
-  }
 
   return {
     text: result.value,
