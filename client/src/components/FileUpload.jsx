@@ -32,21 +32,26 @@ function FileUpload({ onUploadComplete }) {
   // Page estimates per file — read from DOCX metadata when available
   const [pageEstimates, setPageEstimates] = useState({});
 
-  // Read actual page count from DOCX metadata (docProps/app.xml) client-side
+  // Estimate page count from DOCX content (not metadata - it's often wrong)
   const readDocxPageCount = async (file) => {
     try {
       const { default: JSZip } = await import('jszip');
       const zip = await JSZip.loadAsync(file);
-      const appXml = zip.file('docProps/app.xml');
-      if (appXml) {
-        const xml = await appXml.async('string');
-        const match = xml.match(/<Pages>(\d+)<\/Pages>/);
-        if (match) return parseInt(match[1], 10);
+
+      // Estimate from actual text content length (most reliable)
+      const docXml = zip.file('word/document.xml');
+      if (docXml) {
+        const xml = await docXml.async('string');
+        // Count text characters (strip XML tags)
+        const textOnly = xml.replace(/<[^>]+>/g, '');
+        const charCount = textOnly.replace(/\s+/g, ' ').trim().length;
+        // ~2000 chars per page for UPSC content
+        const estimated = Math.max(1, Math.ceil(charCount / 2000));
+        return estimated;
       }
     } catch {}
-    // Fallback: conservative estimate (images inflate file size heavily)
-    // Use ~500KB per page as a rough average for image-heavy UPSC docs
-    return Math.max(1, Math.round(file.size / 500000));
+    // Fallback: estimate from file size (~25KB per page for text-heavy docs)
+    return Math.max(1, Math.round(file.size / 25000));
   };
 
   const getPageWarning = (file) => {
