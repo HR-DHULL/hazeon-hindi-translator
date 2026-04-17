@@ -220,7 +220,7 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
 
     // Detect truncation - if output was cut off, log it
     if (finishReason === 'length') {
-      console.warn(`  WARNING: Batch output truncated (hit max_tokens). Some paragraphs may be untranslated.`);
+      console.warn(`  WARNING: Batch output truncated (hit max_tokens). Will retry missing paragraphs.`);
     }
   } catch (err) {
     clearTimeout(timer);
@@ -243,7 +243,7 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
     }
   }
 
-  // Fallback: if Gemini didn't use markers properly (e.g. for single paragraph)
+  // Fallback: if model didn't use markers properly (e.g. for single paragraph)
   const hasEmpty = parsed.some((r, i) => !r && paragraphs[i].trim());
   if (hasEmpty && paragraphs.length === 1) {
     return [rawOutput.trim()];
@@ -262,6 +262,8 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
     console.log(`  Retrying ${needsRetry.length} untranslated paragraphs individually (attempt ${retryCount + 1})...`);
     for (const idx of needsRetry) {
       try {
+        // Delay between individual retries to avoid rate limits
+        await new Promise(r => setTimeout(r, 500));
         const singleResult = await translateWithOpenAI([paragraphs[idx]], retryCount + 1);
         if (singleResult[0] && !hasUntranslatedEnglish(singleResult[0], paragraphs[idx])) {
           parsed[idx] = singleResult[0];
@@ -498,14 +500,13 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
 
 // ── OpenAI paragraph translation (batched, parallel, with translation memory) ─
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  // Dynamic batch size - starts at 30, reduces on API failures
-  // Batch size: with filtered glossary, each call uses ~2K tokens instead of 17K
-  // so we can use larger batches again
-  // Batch size 10: guarantees output fits in gpt-4o-mini's 16K token limit.
-  // 15 was too large - output got truncated, leaving paragraphs untranslated.
-  let BATCH_SIZE = 10;
-  const MIN_BATCH = 10;
-  const MAX_BATCH = 40;
+  // Dynamic batch size — must fit in gpt-4o-mini's 16K output token limit.
+  // Hindi UPSC text is ~1.5-2x longer than English in tokens.
+  // 10 was still too large — consistently truncated, leaving 5-10 paragraphs untranslated.
+  // 5 keeps output well under 16K even for dense exam content.
+  let BATCH_SIZE = 5;
+  const MIN_BATCH = 3;
+  const MAX_BATCH = 10;
 
   // Track API response times to adjust batch size
   let lastBatchTime = 0;
@@ -750,10 +751,11 @@ async function verifyAndFixTranslations(originals, translated, onProgress, skipI
     return translated;
   }
 
-  // Cap second-pass retries to limit API cost (raised from 15 to 30 for better coverage)
-  const MAX_SECOND_PASS = 15; // reduced from 30 to limit API cost on large docs
+  // With batch size reduced to 5, far fewer paragraphs should need second-pass.
+  // Cap at 50 as a safety net for very large documents.
+  const MAX_SECOND_PASS = 50;
   if (problematic.length > MAX_SECOND_PASS) {
-    console.log(`  Two-pass review: capping from ${problematic.length} → ${MAX_SECOND_PASS} paragraphs to limit API cost`);
+    console.log(`  Two-pass review: capping from ${problematic.length} → ${MAX_SECOND_PASS} paragraphs`);
     problematic.length = MAX_SECOND_PASS;
   }
 
