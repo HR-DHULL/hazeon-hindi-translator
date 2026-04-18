@@ -1,20 +1,23 @@
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { applyGlossaryPostProcessing, applyHindiCorrections, getGlossaryPrompt } from './glossary.js';
 import { applyContextDisambiguation, getDisambiguationPrompt } from './contextDisambiguation.js';
 import { lookupCache, storeCache, getCacheStats } from './translationCache.js';
 
-// ── OpenAI — Primary Translation Engine ─────────────────────────────────────
-if (!process.env.OPENAI_API_KEY) {
-  console.error('  WARNING: OPENAI_API_KEY is not set. Translation will fail until configured.');
+// ── Gemini — Primary Translation Engine ─────────────────────────────────────
+// Switched from OpenAI (gpt-4o-mini) to Gemini 2.5 Flash:
+// - 1M token context → no output truncation even with large batches
+// - Better Hindi glossary adherence in our testing
+// - Cheaper per token
+if (!process.env.GEMINI_API_KEY) {
+  console.error('  WARNING: GEMINI_API_KEY is not set. Translation will fail until configured.');
 }
 
-const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+const genAI = process.env.GEMINI_API_KEY
+  ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
   : null;
 
-// gpt-4o-mini: stable, no hallucination issues (gpt-4.1-mini had repeating char bugs)
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-if (openai) console.log(`  Translation engine: OpenAI ${OPENAI_MODEL} (UPSC/HCS mode)`);
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+if (genAI) console.log(`  Translation engine: Gemini ${GEMINI_MODEL} (UPSC/HCS mode)`);
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
 // Base prompt — glossary is injected separately via buildSystemPrompt()
@@ -60,7 +63,7 @@ function buildSystemPrompt(subject = null, batchText = '') {
   return UPSC_BASE_PROMPT + '\n\n' + getGlossaryPrompt(subject, batchText);
 }
 
-// ── OpenAI translation ───────────────────────────────────────────────────────
+// ── Gemini translation ───────────────────────────────────────────────────────
 
 // Abbreviations/acronyms that are legitimately kept as English in Hindi output
 const ALLOWED_ENGLISH = /^(UPSC|IAS|HCS|GDP|RBI|GST|SEBI|ISRO|UN|NATO|CRR|SLR|FDI|PIL|CAG|ATM|EMI|DNA|RNA|NOTA|NCL|CSR|IMF|NGO|NRI|UNESCO|UNICEF|WHO|FIFA|BRICS|IGMDP|OMR|CSAT|PCS|NDA|BJP|INC|CBI|ED|IPC|CPC|NITI|NHRC|NHPC|NDMA|NCPCR|UIDAI|RTE|RTI|CAA|NRC|NPR|JPC|PAC|ECI|CVC|CIC|pH|UV|AM|PM|MCQ|DOCX|PDF|WTO|ILO|IAEA|OPCW|ICC|ICJ|UNSC|UNGA|UNDP|FAO|IDA|IBRD|ADB|NDB|AIIB|IMF|WB|REC|NABARD|SIDBI|MUDRA|MSME|PSU|LPG|CNG|VLCC|ULCC|LED|CFL|PCB|CPU|GPU|SSD|HDD|USB|GPS|GSM|CDMA|LTE|OLED|AMOLED|LCD|IP|HTTP|HTTPS|TCP|UDP|VPN|API|SQL|XML|HTML|CSS|JS|TS|AI|ML|NLP|IoT|AR|VR|MR|XR|EV|ICE|CAFE|TRAI|IRDA|PFRDA|SEBI|IRDAI|NHB|IBC|NCLT|NCLAT|CCI|SAT|TDSAT|APTEL|CERC|CESTAT|ITAT|NFRA|ICAI|ICSI|ICMAI)$/i;
@@ -166,12 +169,12 @@ function restoreExamTags(text, tags) {
 }
 
 /**
- * Translate a batch of paragraphs using OpenAI.
+ * Translate a batch of paragraphs using Gemini.
  * Sends them as a numbered list so the model returns them in the same order.
  */
-async function translateWithOpenAI(paragraphs, retryCount = 0) {
+async function translateWithGemini(paragraphs, retryCount = 0) {
   if (paragraphs.length === 0) return [];
-  if (!openai) throw new Error('OPENAI_API_KEY is not configured. Set it in environment variables.');
+  if (!genAI) throw new Error('GEMINI_API_KEY is not configured. Set it in environment variables.');
 
   // Protect exam source tags before sending
   const tagStores = paragraphs.map(p => protectExamTags(p));
@@ -199,31 +202,24 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
 
   const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each paragraph below from English to Hindi for UPSC/HCS exam material. Each paragraph starts with <<<PN>>> (e.g., <<<P1>>>, <<<P2>>>). Preserve that exact prefix in your output. Output ALL paragraphs with their <<<PN>>> prefix - do not skip any.\n\nCRITICAL RULES:\n1. Translate EVERY paragraph, even short ones like "Primary Market Growth" or "Govt Healthcare Spending".\n2. Do NOT leave ANY English text untranslated. Even single-word headings must be translated.\n3. The only allowed English: acronyms (UPSC, GDP, RBI...), MCQ labels (a)(b)(c)(d), single-letter variables, numbers.\n4. You MUST output exactly ${paragraphs.length} paragraphs with <<<P1>>> through <<<P${paragraphs.length}>>> prefixes.\n\n${numbered}`;
 
-  const timeoutMs = 90000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const model = genAI.getGenerativeModel({
+    model: GEMINI_MODEL,
+    systemInstruction: systemPrompt,
+    generationConfig: { temperature: 0.1, maxOutputTokens: 65000 },
+  });
 
+  let rawOutput;
   try {
-    const response = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      temperature: 0.1,
-      max_tokens: 16000,  // gpt-4o-mini max output is 16,384
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMsg },
-      ],
-    }, { signal: controller.signal });
-
-    clearTimeout(timer);
-    var rawOutput = response.choices[0].message.content;
-    var finishReason = response.choices[0].finish_reason;
-
-    // Detect truncation - if output was cut off, log it
-    if (finishReason === 'length') {
-      console.warn(`  WARNING: Batch output truncated (hit max_tokens). Will retry missing paragraphs.`);
+    const result = await Promise.race([
+      model.generateContent(userMsg),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), 120000)),
+    ]);
+    rawOutput = result.response.text();
+    const finishReason = result.response.candidates?.[0]?.finishReason;
+    if (finishReason === 'MAX_TOKENS') {
+      console.warn(`  WARNING: Batch output truncated (hit maxOutputTokens). Will retry missing paragraphs.`);
     }
   } catch (err) {
-    clearTimeout(timer);
     throw err;
   }
 
@@ -264,7 +260,7 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
       try {
         // Delay between individual retries to avoid rate limits
         await new Promise(r => setTimeout(r, 500));
-        const singleResult = await translateWithOpenAI([paragraphs[idx]], retryCount + 1);
+        const singleResult = await translateWithGemini([paragraphs[idx]], retryCount + 1);
         if (singleResult[0] && !hasUntranslatedEnglish(singleResult[0], paragraphs[idx])) {
           parsed[idx] = singleResult[0];
         }
@@ -284,7 +280,7 @@ async function translateWithOpenAI(paragraphs, retryCount = 0) {
  */
 export async function translateChunk(text, chunkIndex, totalChunks, onProgress) {
   try {
-    const results = await translateWithOpenAI([text]);
+    const results = await translateWithGemini([text]);
     let translatedText = results[0] || text;
     translatedText = applyGlossaryPostProcessing(translatedText, text);
     translatedText = applyHindiCorrections(translatedText);
@@ -460,7 +456,7 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
       const batchIndices = identicalIndices.slice(b, b + 10);
       const batchTexts = batchIndices.map(i => cleanedParagraphs[i]);
       try {
-        const results = await translateWithOpenAI(batchTexts);
+        const results = await translateWithGemini(batchTexts);
         for (let j = 0; j < batchIndices.length; j++) {
           const idx = batchIndices[j];
           if (results[j] && results[j].trim() && results[j].trim() !== cleanedParagraphs[idx].trim()) {
@@ -498,15 +494,13 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
   return reattachAnswerLines(withLabels, answerMap);
 }
 
-// ── OpenAI paragraph translation (batched, parallel, with translation memory) ─
+// ── Gemini paragraph translation (batched, parallel, with translation memory) ─
 async function translateParagraphsBatched(paragraphs, onProgress) {
-  // Dynamic batch size — must fit in gpt-4o-mini's 16K output token limit.
-  // Hindi UPSC text is ~1.5-2x longer than English in tokens.
-  // 10 was still too large — consistently truncated, leaving 5-10 paragraphs untranslated.
-  // 5 keeps output well under 16K even for dense exam content.
-  let BATCH_SIZE = 5;
-  const MIN_BATCH = 3;
-  const MAX_BATCH = 10;
+  // Gemini 2.5 Flash has a 1M token context and 64K output tokens.
+  // We can safely use a larger batch than OpenAI's gpt-4o-mini (capped at 5 due to 16K output).
+  let BATCH_SIZE = 20;
+  const MIN_BATCH = 10;
+  const MAX_BATCH = 40;
 
   // Track API response times to adjust batch size
   let lastBatchTime = 0;
@@ -546,15 +540,15 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
   }
 
   if (needsTranslation.length === 0) {
-    console.log('  All paragraphs served from Translation Memory — skipping OpenAI');
+    console.log('  All paragraphs served from Translation Memory — skipping Gemini');
     return translated;
   }
 
   if (cacheHits > 0) {
-    console.log(`  Translating ${needsTranslation.length} remaining paragraphs via OpenAI (${cacheHits} cached)`);
+    console.log(`  Translating ${needsTranslation.length} remaining paragraphs via Gemini (${cacheHits} cached)`);
   }
 
-  // Re-batch only the uncached paragraphs for OpenAI
+  // Re-batch only the uncached paragraphs for Gemini
   const uncachedTexts = needsTranslation.map(i => paragraphs[i]);
   const totalBatches = Math.ceil(uncachedTexts.length / BATCH_SIZE);
 
@@ -593,7 +587,7 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
 
         if (nonEmptyTexts.length > 0) {
           const batchTimerStart = Date.now();
-          const results = await translateWithOpenAI(nonEmptyTexts);
+          const results = await translateWithGemini(nonEmptyTexts);
           lastBatchTime = Date.now() - batchTimerStart;
 
           // Adjust batch size based on API response time
@@ -645,7 +639,7 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
             const nonEmptyIdx = [];
             batch.forEach((p, i) => { if (p.trim()) { nonEmpty.push(p); nonEmptyIdx.push(i); } });
             if (nonEmpty.length > 0) {
-              const results = await translateWithOpenAI(nonEmpty);
+              const results = await translateWithGemini(nonEmpty);
               nonEmptyIdx.forEach((localIdx, ri) => {
                 let t = results[ri] || batch[localIdx];
                 t = applyGlossaryPostProcessing(t, batch[localIdx]);
@@ -710,21 +704,18 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
  * Used for stubborn paragraphs that still have English after the first pass.
  */
 async function forceTranslateSingle(text) {
-  if (!openai) throw new Error('OPENAI_API_KEY not configured');
+  if (!genAI) throw new Error('GEMINI_API_KEY not configured');
 
   const { protected: safeText, tags } = protectExamTags(text);
 
-  const response = await openai.chat.completions.create({
-    model: OPENAI_MODEL,
-    temperature: 0.0,
-    max_tokens: 2000,
-    messages: [
-      { role: 'system', content: 'Translate the given text fully into Hindi (Devanagari script) for UPSC exam material. Keep only: acronyms (UPSC, GDP, RBI, etc.), MCQ option labels (a)(b)(c)(d), single-letter variables (A, B, C), Roman numerals (I, II, III), numbers, math formulas, and §§N§§ placeholders. Translate EVERYTHING else. Output ONLY the Hindi translation.' },
-      { role: 'user', content: `Translate to Hindi:\n${safeText}` },
-    ],
+  const model = genAI.getGenerativeModel({
+    model: GEMINI_MODEL,
+    systemInstruction: 'Translate the given text fully into Hindi (Devanagari script) for UPSC exam material. Keep only: acronyms (UPSC, GDP, RBI, etc.), MCQ option labels (a)(b)(c)(d), single-letter variables (A, B, C), Roman numerals (I, II, III), numbers, math formulas, and §§N§§ placeholders. Translate EVERYTHING else. Output ONLY the Hindi translation.',
+    generationConfig: { temperature: 0.0, maxOutputTokens: 4000 },
   });
 
-  let out = response.choices[0].message.content.trim();
+  const result = await model.generateContent(`Translate to Hindi:\n${safeText}`);
+  let out = result.response.text().trim();
   out = restoreExamTags(out, tags);
   out = applyGlossaryPostProcessing(out, text);
   out = applyHindiCorrections(out);
