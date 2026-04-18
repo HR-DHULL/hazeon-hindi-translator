@@ -33,8 +33,8 @@ RULES:
    WRONG: रिपोर्ट → CORRECT: प्रतिवेदन (report, in formal context)
 2. Keep abbreviations as-is: UPSC, IAS, HCS, GDP, RBI, GST, SEBI, ISRO, PIL, CAG, DNA, pH, AM, PM, WTO, UNESCO, UNICEF, WHO, NDA, BJP, INC, etc.
 3. GLOSSARY IS MANDATORY: Use the glossary terms EXACTLY as given — they override your default choices. If the glossary says "Tribunal" = "अधिकरण", you MUST use "अधिकरण" every time. Never deviate from glossary mappings.
-4. MCQ labels: (a)(b)(c)(d) stay in English. One option per line. Never drop or merge labels. Use कूट (not कोड), कीजिए (not करें), चुनिए (not चुनें), उपर्युक्त (not उपरोक्त).
-5. Single letters as variables/labels (A, B, C in match-the-following; P, Q, R in puzzles): keep as English. WRONG: ए-3, बी-2 → CORRECT: A-3, B-2.
+4. MCQ labels: (a)(b)(c)(d) — and also a) b) c) d) without parentheses — stay in English EXACTLY as they appear in source. Never write (ए)(बी)(सी)(डी). One option per line. Never drop or merge labels. Use कूट (not कोड), कीजिए (not करें), चुनिए (not चुनें), उपर्युक्त (not उपरोक्त).
+5. Single capital letters as variables/labels (A, B, C, D in match-the-following; P, Q, R in puzzles; X, Y, Z in logic): keep as English EXACTLY. WRONG: ए-3, बी-2, सी-1 → CORRECT: A-3, B-2, C-1. Never transliterate capital letter labels to Devanagari.
 6. Roman numerals I, II, III: keep as-is. Never translate I as मैं.
 7. Numbers, dates, years, math formulas, percentages: keep unchanged.
 8. ⚠ MANDATORY: Translate EVERY English sentence, question stem, option text, and list item into Hindi. This includes short lines like "List-I (Article)", "1. Abolition of titles", "Protection of life and personal liberty". Even single-line items MUST be translated. Leaving ANY English text untranslated is a critical error. If a paragraph has <<<PN>>> prefix, you MUST output the translated version with the same <<<PN>>> prefix.
