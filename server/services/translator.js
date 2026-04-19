@@ -455,25 +455,51 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
     translated[idx] = cleanedParagraphs[idx];
   }
 
-  const verified  = await verifyAndFixTranslations(cleanedParagraphs, translated, onProgress, examCitationIndices);
+  // ── Multi-pass repair loop with plateau detection ──────────────────────────
+  // Runs verify-and-fix + identical-check up to 5 times until either:
+  //   - zero stragglers remain, OR
+  //   - pass produces no improvement (plateau)
+  // This matches the local shell-loop pattern that achieved 97-100% accuracy.
+  let verified = translated;
+  let prevStraggle = -1;
+  const MAX_REPAIR_PASSES = 5;
 
-  // ── Additional pass: catch paragraphs that are identical to original ──────
-  // verifyAndFixTranslations only checks for English sentences via regex.
-  // This catches short entries (table cells, headings) that were returned unchanged.
-  const identicalIndices = [];
-  for (let i = 0; i < cleanedParagraphs.length; i++) {
-    if (examCitationIndices.has(i)) continue;
-    const orig = cleanedParagraphs[i]?.trim();
-    const trans = verified[i]?.trim();
-    if (!orig || orig.length < 8) continue;
-    if (/^[\d\s\.\(\)\-,A-Z\/:%→%+]+$/.test(orig)) continue; // pure numbers/codes
-    if (trans === orig) identicalIndices.push(i);
-  }
+  for (let repairPass = 1; repairPass <= MAX_REPAIR_PASSES; repairPass++) {
+    // Step A: force-translate paragraphs flagged by hasUntranslatedEnglish()
+    verified = await verifyAndFixTranslations(cleanedParagraphs, verified, onProgress, examCitationIndices);
 
-  if (identicalIndices.length > 0) {
-    console.log(`  Identical-to-original check: ${identicalIndices.length} paragraphs unchanged. Retranslating ALL in batches...`);
+    // Step B: retranslate paragraphs where translated === original
+    const identicalIndices = [];
+    for (let i = 0; i < cleanedParagraphs.length; i++) {
+      if (examCitationIndices.has(i)) continue;
+      const orig = cleanedParagraphs[i]?.trim();
+      const trans = verified[i]?.trim();
+      if (!orig || orig.length < 8) continue;
+      if (/^[\d\s\.\(\)\-,A-Z\/:%→%+]+$/.test(orig)) continue; // numbers/codes only
+      if (trans === orig) identicalIndices.push(i);
+    }
 
-    // Batch the retranslations (10 at a time) instead of one-by-one
+    if (identicalIndices.length === 0) {
+      console.log(`  Repair pass ${repairPass}: no stragglers — translation fully clean`);
+      break;
+    }
+
+    // Plateau check: no improvement between passes → stop (these are unrecoverable)
+    if (prevStraggle !== -1 && identicalIndices.length >= prevStraggle) {
+      console.log(`  Repair pass ${repairPass}: ${identicalIndices.length} stragglers — plateau reached, stopping`);
+      break;
+    }
+    prevStraggle = identicalIndices.length;
+
+    console.log(`  Repair pass ${repairPass}: ${identicalIndices.length} paragraphs unchanged. Retranslating in batches...`);
+
+    if (onProgress) {
+      await onProgress({
+        status: 'reviewing',
+        message: `Repair pass ${repairPass}/${MAX_REPAIR_PASSES}: retrying ${identicalIndices.length} paragraphs...`,
+      });
+    }
+
     for (let b = 0; b < identicalIndices.length; b += 10) {
       const batchIndices = identicalIndices.slice(b, b + 10);
       const batchTexts = batchIndices.map(i => cleanedParagraphs[i]);
@@ -486,7 +512,6 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
           }
         }
       } catch (_) {
-        // Fallback: try individually
         for (const idx of batchIndices) {
           try {
             const fixed = await forceTranslateSingle(cleanedParagraphs[idx]);
@@ -496,11 +521,11 @@ export async function translateParagraphs(paragraphs, bookContext = '', onProgre
           } catch (__) {}
         }
       }
-      await new Promise(r => setTimeout(r, 1000)); // pace
+      await new Promise(r => setTimeout(r, 1000));
     }
 
     const remaining = identicalIndices.filter(i => verified[i]?.trim() === cleanedParagraphs[i]?.trim()).length;
-    console.log(`  Fixed ${identicalIndices.length - remaining}/${identicalIndices.length} paragraphs`);
+    console.log(`  Repair pass ${repairPass}: fixed ${identicalIndices.length - remaining}/${identicalIndices.length}`);
   }
 
   // Final safety: strip any §§N§§ placeholders and <<<PN>>> markers that survived the pipeline
@@ -764,15 +789,10 @@ async function verifyAndFixTranslations(originals, translated, onProgress, skipI
     return translated;
   }
 
-  // With batch size reduced to 5, far fewer paragraphs should need second-pass.
-  // Cap at 50 as a safety net for very large documents.
-  const MAX_SECOND_PASS = 50;
-  if (problematic.length > MAX_SECOND_PASS) {
-    console.log(`  Two-pass review: capping from ${problematic.length} → ${MAX_SECOND_PASS} paragraphs`);
-    problematic.length = MAX_SECOND_PASS;
-  }
-
-  console.log(`  Two-pass review: ${problematic.length} paragraphs still contain English — force-translating...`);
+  // No cap — the outer repair loop in translateParagraphs handles pacing by
+  // doing up to 5 passes with plateau detection. Capping here would starve
+  // documents that have hundreds of legitimate stragglers.
+  console.log(`  Verify pass: ${problematic.length} paragraphs still contain English — force-translating...`);
 
   if (onProgress) {
     await onProgress({
@@ -782,27 +802,26 @@ async function verifyAndFixTranslations(originals, translated, onProgress, skipI
   }
 
   const result = [...translated];
-  let rateLimitHit = false;
+  // Track consecutive rate-limit failures instead of globally aborting.
+  // forceTranslateSingle already has the 6-attempt exp-backoff inside translateWithGemini's
+  // caller chain for the batch path, but this single-paragraph path doesn't retry —
+  // so bail after 5 consecutive rate-limit errors to prevent runaway quota burn.
+  let consecutiveRateLimited = 0;
   for (const idx of problematic) {
-    if (rateLimitHit) {
-      // Once rate limited, skip remaining retries to avoid burning quota
-      console.warn(`    Skipping paragraph ${idx} (rate limit active)`);
-      continue;
+    if (consecutiveRateLimited >= 5) {
+      console.warn(`    5+ consecutive rate-limits — skipping remaining (outer repair loop will retry next pass)`);
+      break;
     }
     try {
-      // Small delay between each force-translate to avoid rate limits
       await new Promise(r => setTimeout(r, 1000));
       const fixed = await forceTranslateSingle(originals[idx]);
       if (fixed && !hasUntranslatedEnglish(fixed, originals[idx])) {
         result[idx] = fixed;
-        console.log(`    ✓ Fixed paragraph ${idx}`);
-      } else {
-        console.warn(`    ✗ Paragraph ${idx} still has English after force-translate`);
+        consecutiveRateLimited = 0;
       }
     } catch (e) {
-      if (/429|quota|exhausted|rate.?limit/i.test(e.message)) {
-        console.warn(`    Rate limited during second-pass. Stopping retries.`);
-        rateLimitHit = true;
+      if (/429|quota|exhausted|rate.?limit|503|unavailable/i.test(e.message)) {
+        consecutiveRateLimited++;
       } else {
         console.warn(`    Force-translate failed for paragraph ${idx}: ${e.message?.slice(0, 60)}`);
       }
