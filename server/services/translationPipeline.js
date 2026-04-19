@@ -35,10 +35,20 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     await emit({ progress: 5, message: 'Parsing document...' });
     const parsed = await parseFile(filePath);
     const pageCount = parsed.pageCount;
-    const pageWarningMsg = pageCount > 80
-      ? `⚠ Large document (${pageCount} pages) — translation may timeout. Recommend splitting into 30-page files.`
-      : pageCount > 30
-      ? `Note: ${pageCount} pages detected — best accuracy is under 30 pages. Translation will proceed.`
+
+    // Hard gate: Render free tier can't reliably hit 97%+ on large docs.
+    // Route them to the CLI tool instead. Keeping the web UI for small docs ensures
+    // every web translation completes at high accuracy rather than producing 60-70% results.
+    const MAX_PARAGRAPHS_WEB = 800;
+    const paragraphCount = parsed.paragraphTexts?.length || 0;
+    if (paragraphCount > MAX_PARAGRAPHS_WEB) {
+      const msg = `Document has ${paragraphCount} paragraphs (limit: ${MAX_PARAGRAPHS_WEB}). Large files can't reliably hit 97%+ accuracy on the web service. Use the CLI tool (translate_local.js) for bulk work. See docs for details.`;
+      await emit({ status: 'failed', message: msg, progress: 0 });
+      throw new Error(msg);
+    }
+
+    const pageWarningMsg = pageCount > 30
+      ? `Note: ${pageCount} pages detected — translation will run a multi-pass repair loop to maximize accuracy.`
       : null;
 
     await emit({

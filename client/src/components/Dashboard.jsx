@@ -228,6 +228,7 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch, isAdmin }) {
             {jobs.slice(jobPage * JOBS_PER_PAGE, (jobPage + 1) * JOBS_PER_PAGE).map(job => {
               const cfg = statusConfig[job.status] || statusConfig.processing;
               const previewUrl = job.outputFiles?.find(f => f.format === 'preview')?.url;
+              const summary = job.outputFiles?.find(f => f.format === 'summary');
               return (
                 <li key={job.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50 transition group">
                   <div className="shrink-0">{cfg.icon}</div>
@@ -243,6 +244,15 @@ function Dashboard({ jobs, onNewTranslation, onRefresh, authFetch, isAdmin }) {
                       <Clock size={10} />
                       <span>{formatDate(job.createdAt)}</span>
                       {job.pageCount && <><span>·</span><span>{job.pageCount}p</span></>}
+                      {summary && (
+                        <>
+                          <span>·</span>
+                          <span className={summary.translationRate >= 99 ? 'text-green-600 font-medium' : summary.translationRate >= 95 ? 'text-amber-600 font-medium' : 'text-red-600 font-medium'}
+                            title={`${summary.translated}/${summary.total} translated, ${summary.keptAsOriginal} kept as original`}>
+                            {summary.translationRate}%
+                          </span>
+                        </>
+                      )}
                       {job.qualityScore != null && (
                         <>
                           <span>·</span>
