@@ -217,18 +217,18 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
       if (trans === orig) untranslated++;
     }
     const totalPara = paragraphs.length;
-    const translatedCount = totalPara - untranslated;
-    const translationRate = totalPara > 0 ? Math.round((translatedCount / totalPara) * 1000) / 10 : 0;
+    const summaryTranslated = totalPara - untranslated;
+    const translationRate = totalPara > 0 ? Math.round((summaryTranslated / totalPara) * 1000) / 10 : 0;
     const summaryMetadata = {
       total: totalPara,
-      translated: translatedCount,
+      translated: summaryTranslated,
       keptAsOriginal: untranslated,
       translationRate,
       subject: subject || 'auto-detected',
       pageCount,
       sizeKB: Math.round(fs.statSync(docxPath).size / 1024),
     };
-    console.log(`  Summary: ${translatedCount}/${totalPara} translated (${translationRate}%), ${untranslated} kept as original`);
+    console.log(`  Summary: ${summaryTranslated}/${totalPara} translated (${translationRate}%), ${untranslated} kept as original`);
 
     // Stash summary alongside the DOCX file entry in outputFiles so the DB layer
     // doesn't need a new column. Frontend filters by format.
