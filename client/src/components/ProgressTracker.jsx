@@ -300,6 +300,38 @@ function ProgressTracker({ job, onNewTranslation, onViewDashboard }) {
                 </div>
               )}
 
+              {/* Summary stats — read from outputFiles entry with format='summary' */}
+              {(() => {
+                const summary = (job.outputFiles || []).find(f => f.format === 'summary');
+                if (!summary) return null;
+                const rateColor = summary.translationRate >= 99 ? 'text-green-600'
+                  : summary.translationRate >= 95 ? 'text-amber-600'
+                  : 'text-red-600';
+                return (
+                  <div className="bg-white border border-slate-200 rounded-xl px-4 py-4">
+                    <p className="text-xs font-semibold text-slate-700 mb-3">Translation Summary</p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="bg-slate-50 rounded-lg px-3 py-2">
+                        <span className="text-slate-500 block">Translated</span>
+                        <p className={`font-semibold ${rateColor}`}>{summary.translated}/{summary.total} ({summary.translationRate}%)</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-lg px-3 py-2">
+                        <span className="text-slate-500 block">Kept as original</span>
+                        <p className="font-semibold text-slate-700">{summary.keptAsOriginal}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-lg px-3 py-2">
+                        <span className="text-slate-500 block">Subject</span>
+                        <p className="font-semibold text-slate-700 capitalize">{summary.subject}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-lg px-3 py-2">
+                        <span className="text-slate-500 block">Pages / Size</span>
+                        <p className="font-semibold text-slate-700">{summary.pageCount} / {summary.sizeKB} KB</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Download + Preview */}
               <div className="bg-green-50 border border-green-100 rounded-xl px-4 py-4">
                 <p className="text-xs font-semibold text-green-800 mb-3">Translation complete</p>

@@ -205,7 +205,37 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     // Step 4: Mark complete IMMEDIATELY — no extra steps that could OOM/hang
     // Do this FIRST before any other work — if the server OOMs during quality
     // scoring or other non-essential steps, at least the job is marked complete.
-    const outputFiles = [{ format: 'docx', name: docxFilename, path: docxPath }];
+    // Compute summary stats — same formula as translate_local.js CLI output.
+    // A paragraph counts as "still untranslated" if the output equals the input AND
+    // the input has meaningful text (>10 chars, not pure digits/codes/A-Z only).
+    let untranslated = 0;
+    for (let i = 0; i < paragraphs.length; i++) {
+      const orig = paragraphs[i]?.trim();
+      const trans = translatedParagraphs[i]?.trim();
+      if (!orig || orig.length <= 10) continue;
+      if (/^[\d\s\.\(\)\-,A-Z\/:%→]+$/.test(orig)) continue;
+      if (trans === orig) untranslated++;
+    }
+    const totalPara = paragraphs.length;
+    const translatedCount = totalPara - untranslated;
+    const translationRate = totalPara > 0 ? Math.round((translatedCount / totalPara) * 1000) / 10 : 0;
+    const summaryMetadata = {
+      total: totalPara,
+      translated: translatedCount,
+      keptAsOriginal: untranslated,
+      translationRate,
+      subject: subject || 'auto-detected',
+      pageCount,
+      sizeKB: Math.round(fs.statSync(docxPath).size / 1024),
+    };
+    console.log(`  Summary: ${translatedCount}/${totalPara} translated (${translationRate}%), ${untranslated} kept as original`);
+
+    // Stash summary alongside the DOCX file entry in outputFiles so the DB layer
+    // doesn't need a new column. Frontend filters by format.
+    const outputFiles = [
+      { format: 'docx', name: docxFilename, path: docxPath },
+      { format: 'summary', ...summaryMetadata },
+    ];
 
     console.log(`  DOCX generated. Marking job complete...`);
 

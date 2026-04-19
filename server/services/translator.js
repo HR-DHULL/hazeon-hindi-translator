@@ -208,20 +208,42 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
     generationConfig: { temperature: 0.1, maxOutputTokens: 65000 },
   });
 
+  // 6-attempt retry with exponential backoff — ported from translate_local.js.
+  // Handles 503 service-overload storms that were causing cascading batch failures.
   let rawOutput;
-  try {
-    const result = await Promise.race([
-      model.generateContent(userMsg),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), 120000)),
-    ]);
-    rawOutput = result.response.text();
-    const finishReason = result.response.candidates?.[0]?.finishReason;
-    if (finishReason === 'MAX_TOKENS') {
-      console.warn(`  WARNING: Batch output truncated (hit maxOutputTokens). Will retry missing paragraphs.`);
+  const MAX_ATTEMPTS = 6;
+  let lastErr;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      const result = await Promise.race([
+        model.generateContent(userMsg),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), 120000)),
+      ]);
+      rawOutput = result.response.text();
+      const finishReason = result.response.candidates?.[0]?.finishReason;
+      if (finishReason === 'MAX_TOKENS') {
+        console.warn(`  WARNING: Batch output truncated (hit maxOutputTokens). Will retry missing paragraphs.`);
+      }
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+      const is429 = /429|quota|exhausted|rate.?limit/i.test(err.message);
+      const is503 = /503|unavailable|fetching from|ECONNRESET|ETIMEDOUT|network/i.test(err.message);
+      const isTimeout = err.message === 'timed out' || /timed out/i.test(err.message);
+      const remaining = MAX_ATTEMPTS - attempt - 1;
+      if ((is429 || is503 || isTimeout) && remaining > 0) {
+        // 503s: exponential 30s, 60s, 90s, 120s, 150s, 180s (capped). 429: fixed 65s.
+        const wait = is429 ? 65000 : isTimeout ? 15000 : Math.min(30000 * (attempt + 1), 180000);
+        const tag = is429 ? '429' : is503 ? '503' : 'TIMEOUT';
+        console.log(`  [${tag}] Waiting ${wait / 1000}s then retrying... (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
+        await new Promise(r => setTimeout(r, wait));
+        continue;
+      }
+      break; // not a retryable error or attempts exhausted
     }
-  } catch (err) {
-    throw err;
   }
+  if (lastErr) throw lastErr;
 
   // Sanitize: strip repeated character hallucinations (e.g. "享享享享" or "ड़ड़ड़ड़")
   rawOutput = rawOutput.replace(/(.)\1{20,}/g, '$1');
@@ -613,9 +635,9 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
           });
         }
       } catch (err) {
-        const isRateLimit = err.message.includes('429') || /quota|rate.?limit|exhausted/i.test(err.message);
-        const isTimeout = err.message.includes('timed out');
-        const is503 = err.message.includes('503');
+        const isRateLimit = /429|quota|rate.?limit|exhausted/i.test(err.message);
+        const isTimeout = /timed out/i.test(err.message);
+        const is503 = /503|unavailable|fetching from|ECONNRESET|ETIMEDOUT|network/i.test(err.message);
 
         if (isRateLimit || is503) {
           // RATE LIMITED or SERVICE UNAVAILABLE:

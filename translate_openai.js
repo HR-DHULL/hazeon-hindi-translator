@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
+import JSZip from 'jszip';
 import { parseFile } from './server/services/fileParser.js';
 import { cloneAndTranslateDOCX } from './server/services/docxProcessor.js';
 import { getGlossaryPrompt, applyGlossaryPostProcessing, applyHindiCorrections } from './server/services/glossary.js';
@@ -18,9 +19,10 @@ import { applyContextDisambiguation, getDisambiguationPrompt } from './server/se
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const BATCH_SIZE = 40;
-const PAUSE_MS = 1000;  // 1s pause - OpenAI has much higher rate limits
+const BATCH_SIZE = 5;   // 5 keeps output under 16K token cap (10 was truncating)
+const PAUSE_MS = 800;
 const MODEL = 'gpt-4o-mini';
+const FONT_NAME = process.env.TRANSLATE_FONT || 'Nirmala UI';
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_KEY) {
@@ -110,7 +112,9 @@ async function main() {
   }
 
   const baseName = path.basename(inputPath, path.extname(inputPath));
-  const outputPath = process.argv[3] || path.join(path.dirname(inputPath), `${baseName}_hindi.docx`);
+  let outputPath = process.argv[3] || path.join(path.dirname(inputPath), `${baseName}_hindi.docx`);
+  // Cache file: stores translations so a file-lock failure doesn't waste API calls
+  const cachePath = path.join(path.dirname(inputPath), `.${baseName}_translations.json`);
 
   console.log(`\n  Input:  ${inputPath}`);
   console.log(`  Output: ${outputPath}`);
@@ -122,13 +126,30 @@ async function main() {
   const paragraphs = parsed.paragraphTexts;
   console.log(`    ${paragraphs.length} paragraphs, ${parsed.pageCount} pages\n`);
 
+  // Check for existing translation cache from a prior failed run
+  let translated = new Array(paragraphs.length).fill('');
+  let skipTranslation = false;
+  if (fs.existsSync(cachePath)) {
+    try {
+      const cache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+      if (cache.sourceCount === paragraphs.length && Array.isArray(cache.translated)) {
+        translated = cache.translated;
+        skipTranslation = true;
+        console.log(`  Loaded ${translated.length} translations from cache (${cachePath})`);
+        console.log(`  Skipping re-translation — delete that file to force a fresh run.\n`);
+      }
+    } catch {}
+  }
+
   console.log('  [2/4] Translating...');
-  const translated = new Array(paragraphs.length).fill('');
   const totalBatches = Math.ceil(paragraphs.length / BATCH_SIZE);
+  if (skipTranslation) {
+    console.log('  Skipped (using cached translations)\n');
+  }
   let translatedCount = 0;
   const startTime = Date.now();
 
-  for (let b = 0; b < totalBatches; b++) {
+  if (!skipTranslation) for (let b = 0; b < totalBatches; b++) {
     const batchStart = b * BATCH_SIZE;
     const batch = paragraphs.slice(batchStart, batchStart + BATCH_SIZE);
     const nonEmpty = batch.filter(p => p.trim());
@@ -162,8 +183,17 @@ async function main() {
     if (b < totalBatches - 1) await new Promise(r => setTimeout(r, PAUSE_MS));
   }
 
-  const totalTime = Math.round((Date.now() - startTime) / 1000);
-  console.log(`\n    Done in ${totalTime}s (${Math.round(paragraphs.length / totalTime * 60)} paragraphs/min)\n`);
+  if (!skipTranslation) {
+    const totalTime = Math.round((Date.now() - startTime) / 1000);
+    console.log(`\n    Done in ${totalTime}s (${Math.round(paragraphs.length / totalTime * 60)} paragraphs/min)\n`);
+    // Save translations to cache BEFORE attempting DOCX write — protects against file-lock failures
+    try {
+      fs.writeFileSync(cachePath, JSON.stringify({ sourceCount: paragraphs.length, translated }, null, 0));
+      console.log(`    Cached translations to ${cachePath}\n`);
+    } catch (e) {
+      console.warn(`    Cache write failed (non-fatal): ${e.message}`);
+    }
+  }
 
   // ── Second pass: find and retranslate any paragraphs still in English ──
   console.log('  [3/5] Verification pass...');
@@ -218,7 +248,23 @@ async function main() {
   }
 
   console.log('  [4/5] Generating Hindi DOCX...');
-  await cloneAndTranslateDOCX(inputPath, translated, outputPath);
+  try {
+    await cloneAndTranslateDOCX(inputPath, translated, outputPath);
+  } catch (e) {
+    if (/EBUSY|EPERM|locked/i.test(e.message)) {
+      // File is locked (Word open, etc.) — fall back to a timestamped filename
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const fallback = outputPath.replace(/\.docx$/, `_${ts}.docx`);
+      console.warn(`    ${outputPath} is locked. Writing to ${fallback} instead.`);
+      outputPath = fallback;
+      await cloneAndTranslateDOCX(inputPath, translated, outputPath);
+    } else {
+      throw e;
+    }
+  }
+
+  console.log(`  [4.5] Applying font: ${FONT_NAME}...`);
+  await applyFontToDocx(outputPath, FONT_NAME);
 
   const untranslated = translated.filter((t, i) => t === paragraphs[i] && paragraphs[i].trim().length > 10).length;
   console.log(`\n  [5/5] Summary:`);
@@ -226,6 +272,44 @@ async function main() {
   console.log(`    Kept as original: ${untranslated} (${Math.round(untranslated / paragraphs.length * 100)}%)`);
   console.log(`    Output: ${outputPath}`);
   console.log(`    Size: ${(fs.statSync(outputPath).size / 1024).toFixed(0)} KB\n`);
+}
+
+/**
+ * Inject font into document.xml + styles.xml of the output DOCX.
+ * We set the font on all four slots (ascii, hAnsi, eastAsia, cs) so Devanagari
+ * uses Nirmala UI via the complex-script (w:cs) slot, and Latin text still matches.
+ */
+async function applyFontToDocx(docxPath, fontName) {
+  const buffer = fs.readFileSync(docxPath);
+  const zip = await JSZip.loadAsync(buffer);
+
+  const setFontInXml = (xml) => {
+    // Replace any existing w:rFonts tag's ascii/hAnsi/cs/eastAsia attributes.
+    // Keep theme-based rFonts too (replace with explicit font).
+    xml = xml.replace(/<w:rFonts\b[^/]*\/>/g, () => {
+      return `<w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:eastAsia="${fontName}" w:cs="${fontName}"/>`;
+    });
+    // For runs that have rPr but no rFonts, inject one at the start of rPr.
+    xml = xml.replace(/<w:rPr>(?!<w:rFonts)/g, `<w:rPr><w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:eastAsia="${fontName}" w:cs="${fontName}"/>`);
+    return xml;
+  };
+
+  for (const relPath of Object.keys(zip.files)) {
+    if (/^word\/(document|styles|header\d*|footer\d*)\.xml$/.test(relPath)) {
+      const file = zip.file(relPath);
+      if (!file) continue;
+      const xml = await file.async('string');
+      const newXml = setFontInXml(xml);
+      zip.file(relPath, newXml, { compression: 'DEFLATE' });
+    }
+  }
+
+  const out = await zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 1 },
+  });
+  fs.writeFileSync(docxPath, out);
 }
 
 main().catch(err => { console.error('Fatal:', err.message); process.exit(1); });
