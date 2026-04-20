@@ -39,7 +39,7 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     // Hard gate: Render free tier can't reliably hit 97%+ on large docs.
     // Route them to the CLI tool instead. Keeping the web UI for small docs ensures
     // every web translation completes at high accuracy rather than producing 60-70% results.
-    const MAX_PARAGRAPHS_WEB = 800;
+    const MAX_PARAGRAPHS_WEB = 1000;
     const paragraphCount = parsed.paragraphTexts?.length || 0;
     if (paragraphCount > MAX_PARAGRAPHS_WEB) {
       const msg = `Document has ${paragraphCount} paragraphs (limit: ${MAX_PARAGRAPHS_WEB}). Large files can't reliably hit 97%+ accuracy on the web service. Use the CLI tool (translate_local.js) for bulk work. See docs for details.`;
