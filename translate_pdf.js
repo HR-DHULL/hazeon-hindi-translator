@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { parseFile } from './server/services/fileParser.js';
 import { getGlossaryPrompt, applyGlossaryPostProcessing, applyHindiCorrections } from './server/services/glossary.js';
 import { applyContextDisambiguation, getDisambiguationPrompt } from './server/services/contextDisambiguation.js';
@@ -31,11 +31,11 @@ if (!process.env.GEMINI_API_KEY) {
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-const CLAUDE_MODEL = process.env.CLAUDE_FALLBACK_MODEL || 'claude-haiku-4-5';
-const anthropic = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const OPENAI_MODEL = process.env.OPENAI_FALLBACK_MODEL || 'gpt-4o-mini';
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
-if (anthropic) console.log(`  Fallback engine: Claude ${CLAUDE_MODEL}`);
+if (openai) console.log(`  Fallback engine: OpenAI ${OPENAI_MODEL}`);
 
 const UPSC_BASE_PROMPT = `You are an expert Hindi translator for UPSC/HCS competitive exam material. Translate everything from English to formal Hindi (राजभाषा).
 
@@ -101,27 +101,30 @@ async function translateBatch(paragraphs, forcedSubject = null) {
         continue;
       }
       console.error(`    FAILED batch: ${err.message?.slice(0, 80)}`);
-      const claudeResult = await tryClaudeFallback(paragraphs, systemPrompt, userMsg);
-      return claudeResult || paragraphs;
+      const openaiResult = await tryOpenAIFallback(paragraphs, systemPrompt, userMsg);
+      return openaiResult || paragraphs;
     }
   }
   return paragraphs;
 }
 
-async function tryClaudeFallback(paragraphs, systemPrompt, userMsg) {
-  if (!anthropic) {
-    console.warn(`    No ANTHROPIC_API_KEY — keeping English.`);
+async function tryOpenAIFallback(paragraphs, systemPrompt, userMsg) {
+  if (!openai) {
+    console.warn(`    No OPENAI_API_KEY — keeping English.`);
     return null;
   }
-  console.log(`    [FALLBACK] Trying Claude ${CLAUDE_MODEL}...`);
+  console.log(`    [FALLBACK] Trying OpenAI ${OPENAI_MODEL}...`);
   try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
+    const response = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      temperature: 0.1,
       max_tokens: 8192,
-      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
-      messages: [{ role: 'user', content: userMsg }],
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMsg },
+      ],
     });
-    const raw = response.content.filter(b => b.type === 'text').map(b => b.text).join('');
+    const raw = response.choices[0]?.message?.content || '';
     const parts = raw.split(/\n*<<<P?(\d+)>>>\s*/);
     const parsed = Array(paragraphs.length).fill('');
     for (let i = 1; i < parts.length - 1; i += 2) {
@@ -129,8 +132,8 @@ async function tryClaudeFallback(paragraphs, systemPrompt, userMsg) {
       if (idx >= 0 && idx < paragraphs.length) parsed[idx] = parts[i + 1].trim();
     }
     if (paragraphs.length === 1 && !parsed[0]) parsed[0] = raw.trim();
-    const cacheHit = response.usage?.cache_read_input_tokens || 0;
-    console.log(`    [FALLBACK] Claude succeeded (cache read ${cacheHit})`);
+    const cached = response.usage?.prompt_tokens_details?.cached_tokens || 0;
+    console.log(`    [FALLBACK] OpenAI succeeded (cached ${cached} tokens)`);
     return parsed.map((t, i) => {
       if (!t) return paragraphs[i];
       let r = applyGlossaryPostProcessing(t, paragraphs[i]);
@@ -138,7 +141,7 @@ async function tryClaudeFallback(paragraphs, systemPrompt, userMsg) {
       return r;
     });
   } catch (err) {
-    console.warn(`    [FALLBACK] Claude also failed: ${err.message?.slice(0, 100)}`);
+    console.warn(`    [FALLBACK] OpenAI also failed: ${err.message?.slice(0, 100)}`);
     return null;
   }
 }

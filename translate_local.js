@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { parseFile } from './server/services/fileParser.js';
 import { cloneAndTranslateDOCX } from './server/services/docxProcessor.js';
 import { getGlossaryPrompt, applyGlossaryPostProcessing, applyHindiCorrections } from './server/services/glossary.js';
@@ -32,14 +32,14 @@ if (!process.env.GEMINI_API_KEY) {
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Claude fallback — kicks in when Gemini fails all retries (service outage, etc.)
-// Uses haiku-4-5 for cost/speed. Prompt caching on the large UPSC system prompt
-// makes repeat calls near-free (0.1x input price on cache reads).
-const CLAUDE_MODEL = process.env.CLAUDE_FALLBACK_MODEL || 'claude-haiku-4-5';
-const anthropic = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+// OpenAI fallback — kicks in when Gemini fails all retries (service outage, etc.)
+// Uses gpt-4o-mini for cost. OpenAI auto-caches prompt prefixes >1024 tokens,
+// so repeat calls with the same system prompt are ~50% cheaper after the first.
+const OPENAI_MODEL = process.env.OPENAI_FALLBACK_MODEL || 'gpt-4o-mini';
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
-if (anthropic) console.log(`  Fallback engine: Claude ${CLAUDE_MODEL} (kicks in if Gemini fails)`);
+if (openai) console.log(`  Fallback engine: OpenAI ${OPENAI_MODEL} (kicks in if Gemini fails)`);
 
 // Full prompt matching server/services/translator.js UPSC_BASE_PROMPT
 const UPSC_BASE_PROMPT = `You are an expert Hindi translator for UPSC/HCS competitive exam material. Translate everything from English to formal Hindi (राजभाषा) using the exact language of official UPSC question papers and Lok Sabha proceedings.
@@ -133,35 +133,36 @@ async function translateBatch(paragraphs, batchNum, totalBatches, forcedSubject 
         continue;
       }
       console.error(`    FAILED batch ${batchNum}: ${err.message?.slice(0, 80)}`);
-      // Gemini is toast — try Claude fallback with the same prompt
-      const claudeResult = await tryClaudeFallback(paragraphs, systemPrompt, userMsg, batchNum);
-      return claudeResult || paragraphs;
+      // Gemini is toast — try OpenAI fallback with the same prompt
+      const openaiResult = await tryOpenAIFallback(paragraphs, systemPrompt, userMsg, batchNum);
+      return openaiResult || paragraphs;
     }
   }
   return paragraphs;
 }
 
 /**
- * Fallback: call Claude Haiku with the same system prompt + user message.
- * Prompt caching on the system prompt (~17K tokens) makes repeat calls near-free.
- * Returns null if Claude also fails; caller then keeps the original paragraphs.
+ * Fallback: call OpenAI (gpt-4o-mini) with the same system prompt + user message.
+ * OpenAI auto-caches prompt prefixes >1024 tokens — no markers needed.
+ * Returns null if OpenAI also fails; caller then keeps the original paragraphs.
  */
-async function tryClaudeFallback(paragraphs, systemPrompt, userMsg, batchNum) {
-  if (!anthropic) {
-    console.warn(`    No ANTHROPIC_API_KEY — can't fallback. Keeping English.`);
+async function tryOpenAIFallback(paragraphs, systemPrompt, userMsg, batchNum) {
+  if (!openai) {
+    console.warn(`    No OPENAI_API_KEY — can't fallback. Keeping English.`);
     return null;
   }
-  console.log(`    [FALLBACK] Trying Claude ${CLAUDE_MODEL}...`);
+  console.log(`    [FALLBACK] Trying OpenAI ${OPENAI_MODEL}...`);
   try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
+    const response = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      temperature: 0.1,
       max_tokens: 8192,
-      system: [
-        { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMsg },
       ],
-      messages: [{ role: 'user', content: userMsg }],
     });
-    const raw = response.content.filter(b => b.type === 'text').map(b => b.text).join('');
+    const raw = response.choices[0]?.message?.content || '';
 
     // Parse same <<<PN>>> format as Gemini path
     const parts = raw.split(/\n*<<<P?(\d+)>>>\s*/);
@@ -172,9 +173,8 @@ async function tryClaudeFallback(paragraphs, systemPrompt, userMsg, batchNum) {
     }
     if (paragraphs.length === 1 && !parsed[0]) parsed[0] = raw.trim();
 
-    const cacheHit = response.usage?.cache_read_input_tokens || 0;
-    const cacheWrite = response.usage?.cache_creation_input_tokens || 0;
-    console.log(`    [FALLBACK] Claude succeeded (cache read ${cacheHit}, write ${cacheWrite})`);
+    const cached = response.usage?.prompt_tokens_details?.cached_tokens || 0;
+    console.log(`    [FALLBACK] OpenAI succeeded (cached ${cached} tokens)`);
 
     return parsed.map((t, i) => {
       if (!t) return paragraphs[i];
@@ -183,7 +183,7 @@ async function tryClaudeFallback(paragraphs, systemPrompt, userMsg, batchNum) {
       return result;
     });
   } catch (err) {
-    console.warn(`    [FALLBACK] Claude also failed: ${err.message?.slice(0, 100)}`);
+    console.warn(`    [FALLBACK] OpenAI also failed: ${err.message?.slice(0, 100)}`);
     return null;
   }
 }
