@@ -1,0 +1,11 @@
+timestamp	experiment_id	scenario	composite_score	glossary_compliance	completeness	format_preservation	hindi_quality	no_transliteration	exam_tag_preservation	latency_score	elapsed_seconds	status	description
+2026-04-14 15:56:14	baseline_mcq_polity	mcq_polity	0.9299	0.938	0.915	1.000	0.750	1.000	1.000	1.000	7.2	baseline	Initial baseline with current translator.js prompt
+2026-04-14 15:56:25	baseline_mcq_economy	mcq_economy	0.8875	0.917	0.888	1.000	0.539	1.000	1.000	1.000	5.7	baseline	Initial baseline with current translator.js prompt
+2026-04-14 15:56:35	baseline_passage_history	passage_history	0.9625	1.000	1.000	1.000	0.750	1.000	1.000	1.000	4.6	baseline	Initial baseline with current translator.js prompt
+2026-04-14 15:56:48	baseline_match_type	match_type	0.9286	0.750	0.956	1.000	1.000	1.000	1.000	1.000	6.8	baseline	Initial baseline with current translator.js prompt
+2026-04-14 15:56:59	baseline_geography_environment	geography_environment	0.9798	0.938	0.982	1.000	1.000	1.000	1.000	0.980	5.9	baseline	Initial baseline with current translator.js prompt
+2026-04-14 15:57:45	5c893ccd	mcq_polity	0.9674	0.938	0.915	1.000	1.000	1.000	1.000	1.000	8.6	keep	Added 9 anti-transliteration negative examples to rule 1
+2026-04-14 15:58:13	57d355fb	mcq_economy	0.9499	0.917	0.909	0.926	1.000	1.000	1.000	1.000	6.6	keep	Cross-val: anti-transliteration on mcq_economy
+2026-04-14 15:58:28	7ebd8fc6	passage_history	0.9997	1.000	1.000	1.000	1.000	1.000	1.000	0.994	5.3	keep	Cross-val: anti-transliteration on passage_history
+2026-04-14 15:58:45	be3b2582	match_type	0.9599	0.875	0.956	1.000	1.000	1.000	1.000	1.000	10.2	keep	Cross-val: anti-transliteration on match_type
+2026-04-14 15:59:06	e090abbb	geography_environment	0.9715	0.938	0.983	1.000	1.000	1.000	1.000	0.811	13.5	discard	Cross-val: anti-transliteration on geography_environment

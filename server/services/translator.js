@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import Anthropic from '@anthropic-ai/sdk';
 import { applyGlossaryPostProcessing, applyHindiCorrections, getGlossaryPrompt } from './glossary.js';
 import { applyContextDisambiguation, getDisambiguationPrompt } from './contextDisambiguation.js';
 import { lookupCache, storeCache, getCacheStats } from './translationCache.js';
@@ -18,6 +19,14 @@ const genAI = process.env.GEMINI_API_KEY
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 if (genAI) console.log(`  Translation engine: Gemini ${GEMINI_MODEL} (UPSC/HCS mode)`);
+
+// Claude fallback — kicks in when Gemini exhausts all retries (outage/timeout).
+// Prompt caching on the system prompt makes repeat calls near-free.
+const CLAUDE_MODEL = process.env.CLAUDE_FALLBACK_MODEL || 'claude-haiku-4-5';
+const anthropic = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null;
+if (anthropic) console.log(`  Fallback engine: Claude ${CLAUDE_MODEL} (kicks in if Gemini fails)`);
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
 // Base prompt — glossary is injected separately via buildSystemPrompt()
@@ -243,7 +252,25 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
       break; // not a retryable error or attempts exhausted
     }
   }
-  if (lastErr) throw lastErr;
+  // Gemini exhausted all retries — try Claude fallback with the same prompt.
+  if (lastErr) {
+    if (!anthropic) throw lastErr;
+    console.log(`  [FALLBACK] Gemini exhausted. Trying Claude ${CLAUDE_MODEL}...`);
+    try {
+      const response = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 8192,
+        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+        messages: [{ role: 'user', content: userMsg }],
+      });
+      rawOutput = response.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      const cacheHit = response.usage?.cache_read_input_tokens || 0;
+      console.log(`  [FALLBACK] Claude succeeded (cache read ${cacheHit} tokens)`);
+    } catch (claudeErr) {
+      console.warn(`  [FALLBACK] Claude also failed: ${claudeErr.message?.slice(0, 100)}`);
+      throw lastErr; // re-throw the original Gemini error so outer retry handler logs sanely
+    }
+  }
 
   // Sanitize: strip repeated character hallucinations (e.g. "享享享享" or "ड़ड़ड़ड़")
   rawOutput = rawOutput.replace(/(.)\1{20,}/g, '$1');

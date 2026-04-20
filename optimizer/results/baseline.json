@@ -1,0 +1,11 @@
+{
+  "scores": {
+    "mcq_polity": 0.9299,
+    "mcq_economy": 0.8875,
+    "passage_history": 0.9625,
+    "match_type": 0.9286,
+    "geography_environment": 0.9798
+  },
+  "average": 0.9376599999999999,
+  "timestamp": "2026-04-14T15:56:59.571090"
+}

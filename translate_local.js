@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import Anthropic from '@anthropic-ai/sdk';
 import { parseFile } from './server/services/fileParser.js';
 import { cloneAndTranslateDOCX } from './server/services/docxProcessor.js';
 import { getGlossaryPrompt, applyGlossaryPostProcessing, applyHindiCorrections } from './server/services/glossary.js';
@@ -30,6 +31,15 @@ if (!process.env.GEMINI_API_KEY) {
 }
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// Claude fallback — kicks in when Gemini fails all retries (service outage, etc.)
+// Uses haiku-4-5 for cost/speed. Prompt caching on the large UPSC system prompt
+// makes repeat calls near-free (0.1x input price on cache reads).
+const CLAUDE_MODEL = process.env.CLAUDE_FALLBACK_MODEL || 'claude-haiku-4-5';
+const anthropic = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null;
+if (anthropic) console.log(`  Fallback engine: Claude ${CLAUDE_MODEL} (kicks in if Gemini fails)`);
 
 // Full prompt matching server/services/translator.js UPSC_BASE_PROMPT
 const UPSC_BASE_PROMPT = `You are an expert Hindi translator for UPSC/HCS competitive exam material. Translate everything from English to formal Hindi (राजभाषा) using the exact language of official UPSC question papers and Lok Sabha proceedings.
@@ -123,10 +133,59 @@ async function translateBatch(paragraphs, batchNum, totalBatches, forcedSubject 
         continue;
       }
       console.error(`    FAILED batch ${batchNum}: ${err.message?.slice(0, 80)}`);
-      return paragraphs;
+      // Gemini is toast — try Claude fallback with the same prompt
+      const claudeResult = await tryClaudeFallback(paragraphs, systemPrompt, userMsg, batchNum);
+      return claudeResult || paragraphs;
     }
   }
   return paragraphs;
+}
+
+/**
+ * Fallback: call Claude Haiku with the same system prompt + user message.
+ * Prompt caching on the system prompt (~17K tokens) makes repeat calls near-free.
+ * Returns null if Claude also fails; caller then keeps the original paragraphs.
+ */
+async function tryClaudeFallback(paragraphs, systemPrompt, userMsg, batchNum) {
+  if (!anthropic) {
+    console.warn(`    No ANTHROPIC_API_KEY — can't fallback. Keeping English.`);
+    return null;
+  }
+  console.log(`    [FALLBACK] Trying Claude ${CLAUDE_MODEL}...`);
+  try {
+    const response = await anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 8192,
+      system: [
+        { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+      ],
+      messages: [{ role: 'user', content: userMsg }],
+    });
+    const raw = response.content.filter(b => b.type === 'text').map(b => b.text).join('');
+
+    // Parse same <<<PN>>> format as Gemini path
+    const parts = raw.split(/\n*<<<P?(\d+)>>>\s*/);
+    const parsed = Array(paragraphs.length).fill('');
+    for (let i = 1; i < parts.length - 1; i += 2) {
+      const idx = parseInt(parts[i], 10) - 1;
+      if (idx >= 0 && idx < paragraphs.length) parsed[idx] = parts[i + 1].trim();
+    }
+    if (paragraphs.length === 1 && !parsed[0]) parsed[0] = raw.trim();
+
+    const cacheHit = response.usage?.cache_read_input_tokens || 0;
+    const cacheWrite = response.usage?.cache_creation_input_tokens || 0;
+    console.log(`    [FALLBACK] Claude succeeded (cache read ${cacheHit}, write ${cacheWrite})`);
+
+    return parsed.map((t, i) => {
+      if (!t) return paragraphs[i];
+      let result = applyGlossaryPostProcessing(t, paragraphs[i]);
+      result = applyHindiCorrections(result);
+      return result;
+    });
+  } catch (err) {
+    console.warn(`    [FALLBACK] Claude also failed: ${err.message?.slice(0, 100)}`);
+    return null;
+  }
 }
 
 async function main() {

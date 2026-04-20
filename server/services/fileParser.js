@@ -75,18 +75,20 @@ async function parseDOCX(filePath) {
  * Note: scanned/image PDFs will produce empty text - user should convert to DOCX.
  */
 async function parsePDF(filePath) {
-  let pdfParse;
+  // pdf-parse v2 uses a class-based API (not the v1 default function).
+  let PDFParse;
   try {
-    pdfParse = (await import('pdf-parse')).default;
+    ({ PDFParse } = await import('pdf-parse'));
   } catch {
     throw new Error('PDF support requires pdf-parse package. Install with: npm install pdf-parse');
   }
 
   const buffer = fs.readFileSync(filePath);
-  const data = await pdfParse(buffer);
+  const parser = new PDFParse({ data: buffer });
+  const data = await parser.getText();
 
   const text = data.text || '';
-  const pageCount = data.numpages || Math.max(1, Math.ceil(text.length / 2000));
+  const pageCount = data.numpages || data.pages?.length || Math.max(1, Math.ceil(text.length / 2000));
 
   if (!text.trim()) {
     throw new Error('PDF appears to be scanned/image-based with no extractable text. Please convert to DOCX using OCR software first.');
