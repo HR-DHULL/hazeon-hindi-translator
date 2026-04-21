@@ -128,7 +128,7 @@ if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
 let server = null;
 if (!process.env.NETLIFY && !process.env.VERCEL && !process.env.NETLIFY_DEV) {
   const PORT = process.env.PORT || 3001;
-  const engine = `OpenAI (${process.env.OPENAI_MODEL || 'gpt-4o-mini'})`;
+  const engine = `OpenAI (${process.env.OPENAI_PRIMARY_MODEL || 'gpt-4o'})`;
   server = app.listen(PORT, () => {
     console.log(`\n  UPSC Hindi Translator running on http://localhost:${PORT}`);
     console.log(`  Translation engine: ${engine}\n`);
