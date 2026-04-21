@@ -4,29 +4,26 @@ import { applyGlossaryPostProcessing, applyHindiCorrections, getGlossaryPrompt }
 import { applyContextDisambiguation, getDisambiguationPrompt } from './contextDisambiguation.js';
 import { lookupCache, storeCache, getCacheStats } from './translationCache.js';
 
-// ── Gemini — Primary Translation Engine ─────────────────────────────────────
-// Switched from OpenAI (gpt-4o-mini) to Gemini 2.5 Flash:
-// - 1M token context → no output truncation even with large batches
-// - Better Hindi glossary adherence in our testing
-// - Cheaper per token
-if (!process.env.GEMINI_API_KEY) {
-  console.error('  WARNING: GEMINI_API_KEY is not set. Translation will fail until configured.');
+// ── OpenAI GPT-4o — Primary Translation Engine ──────────────────────────────
+// Switched from Gemini to OpenAI because Gemini 2.5 Flash 503s have been
+// severe and sustained. GPT-4o produces UPSC-quality Hindi when the same
+// glossary post-processing is applied. Gemini kept as fallback.
+if (!process.env.OPENAI_API_KEY) {
+  console.error('  WARNING: OPENAI_API_KEY is not set. Translation will fail until configured.');
 }
 
-const genAI = process.env.GEMINI_API_KEY
-  ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
-  : null;
-
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-if (genAI) console.log(`  Translation engine: Gemini ${GEMINI_MODEL} (UPSC/HCS mode)`);
-
-// OpenAI fallback — kicks in when Gemini exhausts all retries (outage/timeout).
-// Auto-cached prompt prefixes make repeat calls cheaper.
-const OPENAI_FALLBACK_MODEL = process.env.OPENAI_FALLBACK_MODEL || 'gpt-4o-mini';
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
-if (openai) console.log(`  Fallback engine: OpenAI ${OPENAI_FALLBACK_MODEL} (kicks in if Gemini fails)`);
+const OPENAI_PRIMARY_MODEL = process.env.OPENAI_PRIMARY_MODEL || 'gpt-4o';
+if (openai) console.log(`  Primary engine: OpenAI ${OPENAI_PRIMARY_MODEL} (UPSC/HCS mode)`);
+
+// Gemini fallback — kicks in when OpenAI exhausts retries.
+const genAI = process.env.GEMINI_API_KEY
+  ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+  : null;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+if (genAI) console.log(`  Fallback engine: Gemini ${GEMINI_MODEL} (kicks in if OpenAI fails)`);
 
 // ── System prompt for UPSC/HCS context-aware translation ─────────────────────
 // Base prompt — glossary is injected separately via buildSystemPrompt()
@@ -211,67 +208,64 @@ async function translateWithGemini(paragraphs, retryCount = 0) {
 
   const userMsg = `${disambiguationInstructions ? disambiguationInstructions + '\n\n' : ''}Translate each paragraph below from English to Hindi for UPSC/HCS exam material. Each paragraph starts with <<<PN>>> (e.g., <<<P1>>>, <<<P2>>>). Preserve that exact prefix in your output. Output ALL paragraphs with their <<<PN>>> prefix - do not skip any.\n\nCRITICAL RULES:\n1. Translate EVERY paragraph, even short ones like "Primary Market Growth" or "Govt Healthcare Spending".\n2. Do NOT leave ANY English text untranslated. Even single-word headings must be translated.\n3. The only allowed English: acronyms (UPSC, GDP, RBI...), MCQ labels (a)(b)(c)(d), single-letter variables, numbers.\n4. You MUST output exactly ${paragraphs.length} paragraphs with <<<P1>>> through <<<P${paragraphs.length}>>> prefixes.\n\n${numbered}`;
 
-  const model = genAI.getGenerativeModel({
-    model: GEMINI_MODEL,
-    systemInstruction: systemPrompt,
-    generationConfig: { temperature: 0.1, maxOutputTokens: 65000 },
-  });
-
-  // 6-attempt retry with exponential backoff — ported from translate_local.js.
-  // Handles 503 service-overload storms that were causing cascading batch failures.
+  // ── PRIMARY: OpenAI gpt-4o ──
   let rawOutput;
-  const MAX_ATTEMPTS = 6;
   let lastErr;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+  if (openai) {
+    const MAX_OPENAI_ATTEMPTS = 3;
+    for (let attempt = 0; attempt < MAX_OPENAI_ATTEMPTS; attempt++) {
+      try {
+        const response = await openai.chat.completions.create({
+          model: OPENAI_PRIMARY_MODEL,
+          temperature: 0.1,
+          max_tokens: 16000,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMsg },
+          ],
+        });
+        rawOutput = response.choices[0]?.message?.content || '';
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        const is429 = /429|rate.?limit|quota/i.test(err.message);
+        const is5xx = /5\d\d|timeout|ECONNRESET|ETIMEDOUT/i.test(err.message);
+        const remaining = MAX_OPENAI_ATTEMPTS - attempt - 1;
+        if ((is429 || is5xx) && remaining > 0) {
+          const wait = 15000 * (attempt + 1);
+          console.log(`  [OpenAI ${is429 ? '429' : '5xx'}] Waiting ${wait/1000}s...`);
+          await new Promise(r => setTimeout(r, wait));
+          continue;
+        }
+        console.warn(`  OpenAI failed: ${err.message?.slice(0, 80)}`);
+        break;
+      }
+    }
+  } else {
+    lastErr = new Error('OPENAI_API_KEY not set');
+  }
+
+  // ── FALLBACK: Gemini 2.5 Flash ──
+  if (lastErr) {
+    if (!genAI) throw lastErr;
+    console.log(`  [FALLBACK] OpenAI unavailable. Trying Gemini ${GEMINI_MODEL}...`);
+    const model = genAI.getGenerativeModel({
+      model: GEMINI_MODEL,
+      systemInstruction: systemPrompt,
+      generationConfig: { temperature: 0.1, maxOutputTokens: 65000 },
+    });
     try {
       const result = await Promise.race([
         model.generateContent(userMsg),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), 120000)),
       ]);
       rawOutput = result.response.text();
-      const finishReason = result.response.candidates?.[0]?.finishReason;
-      if (finishReason === 'MAX_TOKENS') {
-        console.warn(`  WARNING: Batch output truncated (hit maxOutputTokens). Will retry missing paragraphs.`);
-      }
+      console.log(`  [FALLBACK] Gemini succeeded`);
       lastErr = null;
-      break;
-    } catch (err) {
-      lastErr = err;
-      const is429 = /429|quota|exhausted|rate.?limit/i.test(err.message);
-      const is503 = /503|unavailable|fetching from|ECONNRESET|ETIMEDOUT|network/i.test(err.message);
-      const isTimeout = err.message === 'timed out' || /timed out/i.test(err.message);
-      const remaining = MAX_ATTEMPTS - attempt - 1;
-      if ((is429 || is503 || isTimeout) && remaining > 0) {
-        // 503s: exponential 30s, 60s, 90s, 120s, 150s, 180s (capped). 429: fixed 65s.
-        const wait = is429 ? 65000 : isTimeout ? 15000 : Math.min(30000 * (attempt + 1), 180000);
-        const tag = is429 ? '429' : is503 ? '503' : 'TIMEOUT';
-        console.log(`  [${tag}] Waiting ${wait / 1000}s then retrying... (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
-        await new Promise(r => setTimeout(r, wait));
-        continue;
-      }
-      break; // not a retryable error or attempts exhausted
-    }
-  }
-  // Gemini exhausted all retries — try OpenAI fallback with the same prompt.
-  if (lastErr) {
-    if (!openai) throw lastErr;
-    console.log(`  [FALLBACK] Gemini exhausted. Trying OpenAI ${OPENAI_FALLBACK_MODEL}...`);
-    try {
-      const response = await openai.chat.completions.create({
-        model: OPENAI_FALLBACK_MODEL,
-        temperature: 0.1,
-        max_tokens: 8192,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMsg },
-        ],
-      });
-      rawOutput = response.choices[0]?.message?.content || '';
-      const cached = response.usage?.prompt_tokens_details?.cached_tokens || 0;
-      console.log(`  [FALLBACK] OpenAI succeeded (cached ${cached} tokens)`);
-    } catch (openaiErr) {
-      console.warn(`  [FALLBACK] OpenAI also failed: ${openaiErr.message?.slice(0, 100)}`);
-      throw lastErr; // re-throw the original Gemini error so outer retry handler logs sanely
+    } catch (geminiErr) {
+      console.warn(`  [FALLBACK] Gemini also failed: ${geminiErr.message?.slice(0, 100)}`);
+      throw lastErr;
     }
   }
 
@@ -781,16 +775,37 @@ async function translateParagraphsBatched(paragraphs, onProgress) {
  * Used for stubborn paragraphs that still have English after the first pass.
  */
 async function forceTranslateSingle(text) {
-  if (!genAI) throw new Error('GEMINI_API_KEY not configured');
-
   const { protected: safeText, tags } = protectExamTags(text);
+  const prompt = 'Translate the given text fully into Hindi (Devanagari script) for UPSC exam material. Keep only: acronyms (UPSC, GDP, RBI, etc.), MCQ option labels (a)(b)(c)(d), single-letter variables (A, B, C), Roman numerals (I, II, III), numbers, math formulas, and §§N§§ placeholders. Translate EVERYTHING else. Output ONLY the Hindi translation.';
+
+  // Try OpenAI first, fall back to Gemini
+  if (openai) {
+    try {
+      const response = await openai.chat.completions.create({
+        model: OPENAI_PRIMARY_MODEL,
+        temperature: 0,
+        max_tokens: 4000,
+        messages: [
+          { role: 'system', content: prompt },
+          { role: 'user', content: `Translate to Hindi:\n${safeText}` },
+        ],
+      });
+      let out = (response.choices[0]?.message?.content || '').trim();
+      out = restoreExamTags(out, tags);
+      out = applyGlossaryPostProcessing(out, text);
+      out = applyHindiCorrections(out);
+      return out;
+    } catch (err) {
+      // fall through to Gemini
+    }
+  }
+  if (!genAI) throw new Error('Neither OPENAI_API_KEY nor GEMINI_API_KEY configured');
 
   const model = genAI.getGenerativeModel({
     model: GEMINI_MODEL,
-    systemInstruction: 'Translate the given text fully into Hindi (Devanagari script) for UPSC exam material. Keep only: acronyms (UPSC, GDP, RBI, etc.), MCQ option labels (a)(b)(c)(d), single-letter variables (A, B, C), Roman numerals (I, II, III), numbers, math formulas, and §§N§§ placeholders. Translate EVERYTHING else. Output ONLY the Hindi translation.',
+    systemInstruction: prompt,
     generationConfig: { temperature: 0.0, maxOutputTokens: 4000 },
   });
-
   const result = await model.generateContent(`Translate to Hindi:\n${safeText}`);
   let out = result.response.text().trim();
   out = restoreExamTags(out, tags);

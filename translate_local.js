@@ -32,14 +32,14 @@ if (!process.env.GEMINI_API_KEY) {
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// OpenAI fallback — kicks in when Gemini fails all retries (service outage, etc.)
-// Uses gpt-4o-mini for cost. OpenAI auto-caches prompt prefixes >1024 tokens,
-// so repeat calls with the same system prompt are ~50% cheaper after the first.
-const OPENAI_MODEL = process.env.OPENAI_FALLBACK_MODEL || 'gpt-4o-mini';
+// OpenAI GPT-4o is now the PRIMARY engine — Gemini 2.5 Flash has been
+// plagued by 503 outages. GPT-4o is reliable, same prompt + glossary gets applied.
+const OPENAI_MODEL = process.env.OPENAI_PRIMARY_MODEL || 'gpt-4o';
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
-if (openai) console.log(`  Fallback engine: OpenAI ${OPENAI_MODEL} (kicks in if Gemini fails)`);
+if (openai) console.log(`  Primary engine: OpenAI ${OPENAI_MODEL}`);
+if (genAI) console.log(`  Fallback engine: Gemini ${MODEL} (kicks in if OpenAI fails)`);
 
 // Full prompt matching server/services/translator.js UPSC_BASE_PROMPT
 const UPSC_BASE_PROMPT = `You are an expert Hindi translator for UPSC/HCS competitive exam material. Translate everything from English to formal Hindi (राजभाषा) using the exact language of official UPSC question papers and Lok Sabha proceedings.
@@ -73,8 +73,6 @@ RULES:
 
 async function translateBatch(paragraphs, batchNum, totalBatches, forcedSubject = null) {
   const batchText = paragraphs.join(' ');
-  // If forcedSubject provided, it overrides auto-detection.
-  // We still call applyContextDisambiguation for the disambiguation prompts (side effect).
   const { disambiguations, detectedSubject } = applyContextDisambiguation(batchText);
   const subjectToUse = forcedSubject || detectedSubject || null;
   const glossaryPrompt = getGlossaryPrompt(subjectToUse, batchText);
@@ -84,15 +82,61 @@ async function translateBatch(paragraphs, batchNum, totalBatches, forcedSubject 
   const numbered = paragraphs.map((p, i) => `<<<P${i + 1}>>> ${p}`).join('\n\n');
   const userMsg = `${disambPrompt ? disambPrompt + '\n\n' : ''}Translate each paragraph from English to Hindi. Preserve <<<PN>>> prefixes exactly. Output ALL paragraphs with <<<P1>>> through <<<P${paragraphs.length}>>>.\n\n${numbered}`;
 
-  const model = genAI.getGenerativeModel({
-    model: MODEL,
-    systemInstruction: systemPrompt,
-    generationConfig: { temperature: 0.1 },
-  });
+  // ── Primary: OpenAI gpt-4o with 3 retries (reliable, so fewer retries needed) ──
+  if (openai) {
+    const MAX_OPENAI_ATTEMPTS = 3;
+    for (let attempt = 0; attempt < MAX_OPENAI_ATTEMPTS; attempt++) {
+      try {
+        const response = await openai.chat.completions.create({
+          model: OPENAI_MODEL,
+          temperature: 0.1,
+          max_tokens: 16000,  // gpt-4o supports up to 16K output
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMsg },
+          ],
+        });
+        const raw = response.choices[0]?.message?.content || '';
 
-  const MAX_ATTEMPTS = 6;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        const parts = raw.split(/\n*<<<P?(\d+)>>>\s*/);
+        const parsed = Array(paragraphs.length).fill('');
+        for (let i = 1; i < parts.length - 1; i += 2) {
+          const idx = parseInt(parts[i], 10) - 1;
+          if (idx >= 0 && idx < paragraphs.length) parsed[idx] = parts[i + 1].trim();
+        }
+        if (paragraphs.length === 1 && !parsed[0]) parsed[0] = raw.trim();
+
+        return parsed.map((t, i) => {
+          if (!t) return paragraphs[i];
+          let result = applyGlossaryPostProcessing(t, paragraphs[i]);
+          result = applyHindiCorrections(result);
+          return result;
+        });
+      } catch (err) {
+        const is429 = /429|rate.?limit|quota/i.test(err.message);
+        const is5xx = /5\d\d|timeout|ECONNRESET|ETIMEDOUT/i.test(err.message);
+        const remaining = MAX_OPENAI_ATTEMPTS - attempt - 1;
+        if ((is429 || is5xx) && remaining > 0) {
+          const wait = 15000 * (attempt + 1);
+          console.log(`    [OpenAI ${is429 ? '429' : '5xx'}] Waiting ${wait/1000}s... (attempt ${attempt+1}/${MAX_OPENAI_ATTEMPTS})`);
+          await new Promise(r => setTimeout(r, wait));
+          continue;
+        }
+        console.warn(`    OpenAI failed batch ${batchNum}: ${err.message?.slice(0, 80)}`);
+        break; // fall through to Gemini fallback
+      }
+    }
+  }
+
+  // ── Fallback: Gemini 2.5 Flash ──
+  if (genAI) {
+    console.log(`    [FALLBACK] Trying Gemini ${MODEL}...`);
     try {
+      const model = genAI.getGenerativeModel({
+        model: MODEL,
+        systemInstruction: systemPrompt,
+        generationConfig: { temperature: 0.1 },
+      });
       const result = await Promise.race([
         model.generateContent(userMsg),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 120000)),
@@ -103,90 +147,27 @@ async function translateBatch(paragraphs, batchNum, totalBatches, forcedSubject 
       const parsed = Array(paragraphs.length).fill('');
       for (let i = 1; i < parts.length - 1; i += 2) {
         const idx = parseInt(parts[i], 10) - 1;
-        if (idx >= 0 && idx < paragraphs.length) {
-          parsed[idx] = parts[i + 1].trim();
-        }
+        if (idx >= 0 && idx < paragraphs.length) parsed[idx] = parts[i + 1].trim();
       }
       if (paragraphs.length === 1 && !parsed[0]) parsed[0] = raw.trim();
 
+      console.log(`    [FALLBACK] Gemini succeeded for batch ${batchNum}`);
       return parsed.map((t, i) => {
         if (!t) return paragraphs[i];
-        let result = applyGlossaryPostProcessing(t, paragraphs[i]);
-        result = applyHindiCorrections(result);
-        return result;
+        let r = applyGlossaryPostProcessing(t, paragraphs[i]);
+        r = applyHindiCorrections(r);
+        return r;
       });
     } catch (err) {
-      const is429 = /429|quota|exhausted|rate.?limit/i.test(err.message);
-      const is503 = /503|unavailable|fetching from|ECONNRESET|ETIMEDOUT|network/i.test(err.message);
-      const remaining = MAX_ATTEMPTS - attempt - 1;
-      if ((is429 || is503) && remaining > 0) {
-        // Exponential backoff: 30s, 60s, 90s, 120s, 150s for 503s. 65s constant for 429s.
-        const wait = is429 ? RATE_LIMIT_WAIT : Math.min(30000 * (attempt + 1), 180000);
-        console.log(`    [${is429 ? '429' : '503'}] Waiting ${wait / 1000}s... (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
-        await new Promise(r => setTimeout(r, wait));
-        continue;
-      }
-      if (err.message === 'timeout' && remaining > 0) {
-        const wait = 15000;
-        console.log(`    [TIMEOUT] Waiting ${wait/1000}s then retrying... (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
-        await new Promise(r => setTimeout(r, wait));
-        continue;
-      }
-      console.error(`    FAILED batch ${batchNum}: ${err.message?.slice(0, 80)}`);
-      // Gemini is toast — try OpenAI fallback with the same prompt
-      const openaiResult = await tryOpenAIFallback(paragraphs, systemPrompt, userMsg, batchNum);
-      return openaiResult || paragraphs;
+      console.warn(`    [FALLBACK] Gemini also failed: ${err.message?.slice(0, 80)}`);
     }
   }
+
+  console.error(`    FAILED batch ${batchNum}: both OpenAI and Gemini unavailable. Keeping English.`);
   return paragraphs;
 }
 
-/**
- * Fallback: call OpenAI (gpt-4o-mini) with the same system prompt + user message.
- * OpenAI auto-caches prompt prefixes >1024 tokens — no markers needed.
- * Returns null if OpenAI also fails; caller then keeps the original paragraphs.
- */
-async function tryOpenAIFallback(paragraphs, systemPrompt, userMsg, batchNum) {
-  if (!openai) {
-    console.warn(`    No OPENAI_API_KEY — can't fallback. Keeping English.`);
-    return null;
-  }
-  console.log(`    [FALLBACK] Trying OpenAI ${OPENAI_MODEL}...`);
-  try {
-    const response = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      temperature: 0.1,
-      max_tokens: 8192,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMsg },
-      ],
-    });
-    const raw = response.choices[0]?.message?.content || '';
-
-    // Parse same <<<PN>>> format as Gemini path
-    const parts = raw.split(/\n*<<<P?(\d+)>>>\s*/);
-    const parsed = Array(paragraphs.length).fill('');
-    for (let i = 1; i < parts.length - 1; i += 2) {
-      const idx = parseInt(parts[i], 10) - 1;
-      if (idx >= 0 && idx < paragraphs.length) parsed[idx] = parts[i + 1].trim();
-    }
-    if (paragraphs.length === 1 && !parsed[0]) parsed[0] = raw.trim();
-
-    const cached = response.usage?.prompt_tokens_details?.cached_tokens || 0;
-    console.log(`    [FALLBACK] OpenAI succeeded (cached ${cached} tokens)`);
-
-    return parsed.map((t, i) => {
-      if (!t) return paragraphs[i];
-      let result = applyGlossaryPostProcessing(t, paragraphs[i]);
-      result = applyHindiCorrections(result);
-      return result;
-    });
-  } catch (err) {
-    console.warn(`    [FALLBACK] OpenAI also failed: ${err.message?.slice(0, 100)}`);
-    return null;
-  }
-}
+// (Old tryOpenAIFallback removed — OpenAI is now primary, Gemini fallback inline in translateBatch.)
 
 async function main() {
   // Parse argv: accept --subject=<name> flag anywhere, rest are positional args.

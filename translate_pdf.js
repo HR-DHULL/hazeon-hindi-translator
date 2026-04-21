@@ -31,11 +31,12 @@ if (!process.env.GEMINI_API_KEY) {
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-const OPENAI_MODEL = process.env.OPENAI_FALLBACK_MODEL || 'gpt-4o-mini';
+const OPENAI_MODEL = process.env.OPENAI_PRIMARY_MODEL || 'gpt-4o';
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
-if (openai) console.log(`  Fallback engine: OpenAI ${OPENAI_MODEL}`);
+if (openai) console.log(`  Primary engine: OpenAI ${OPENAI_MODEL}`);
+if (genAI) console.log(`  Fallback engine: Gemini ${MODEL}`);
 
 const UPSC_BASE_PROMPT = `You are an expert Hindi translator for UPSC/HCS competitive exam material. Translate everything from English to formal Hindi (राजभाषा).
 
@@ -60,21 +61,64 @@ async function translateBatch(paragraphs, forcedSubject = null) {
   const numbered = paragraphs.map((p, i) => `<<<P${i + 1}>>> ${p}`).join('\n\n');
   const userMsg = `${disambPrompt ? disambPrompt + '\n\n' : ''}Translate each paragraph from English to Hindi. Preserve <<<PN>>> prefixes exactly.\n\n${numbered}`;
 
-  const model = genAI.getGenerativeModel({
-    model: MODEL,
-    systemInstruction: systemPrompt,
-    generationConfig: { temperature: 0.1 },
-  });
+  // ── Primary: OpenAI gpt-4o ──
+  if (openai) {
+    const MAX_OPENAI_ATTEMPTS = 3;
+    for (let attempt = 0; attempt < MAX_OPENAI_ATTEMPTS; attempt++) {
+      try {
+        const response = await openai.chat.completions.create({
+          model: OPENAI_MODEL,
+          temperature: 0.1,
+          max_tokens: 16000,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMsg },
+          ],
+        });
+        const raw = response.choices[0]?.message?.content || '';
+        const parts = raw.split(/\n*<<<P?(\d+)>>>\s*/);
+        const parsed = Array(paragraphs.length).fill('');
+        for (let i = 1; i < parts.length - 1; i += 2) {
+          const idx = parseInt(parts[i], 10) - 1;
+          if (idx >= 0 && idx < paragraphs.length) parsed[idx] = parts[i + 1].trim();
+        }
+        if (paragraphs.length === 1 && !parsed[0]) parsed[0] = raw.trim();
+        return parsed.map((t, i) => {
+          if (!t) return paragraphs[i];
+          let r = applyGlossaryPostProcessing(t, paragraphs[i]);
+          r = applyHindiCorrections(r);
+          return r;
+        });
+      } catch (err) {
+        const is429 = /429|rate.?limit|quota/i.test(err.message);
+        const is5xx = /5\d\d|timeout|ECONNRESET|ETIMEDOUT/i.test(err.message);
+        const remaining = MAX_OPENAI_ATTEMPTS - attempt - 1;
+        if ((is429 || is5xx) && remaining > 0) {
+          const wait = 15000 * (attempt + 1);
+          console.log(`    [OpenAI ${is429 ? '429' : '5xx'}] Waiting ${wait/1000}s...`);
+          await new Promise(r => setTimeout(r, wait));
+          continue;
+        }
+        console.warn(`    OpenAI failed: ${err.message?.slice(0, 80)}`);
+        break;
+      }
+    }
+  }
 
-  const MAX_ATTEMPTS = 6;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+  // ── Fallback: Gemini ──
+  if (genAI) {
+    console.log(`    [FALLBACK] Trying Gemini ${MODEL}...`);
     try {
+      const model = genAI.getGenerativeModel({
+        model: MODEL,
+        systemInstruction: systemPrompt,
+        generationConfig: { temperature: 0.1 },
+      });
       const result = await Promise.race([
         model.generateContent(userMsg),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 120000)),
       ]);
       const raw = result.response.text();
-
       const parts = raw.split(/\n*<<<P?(\d+)>>>\s*/);
       const parsed = Array(paragraphs.length).fill('');
       for (let i = 1; i < parts.length - 1; i += 2) {
@@ -82,7 +126,7 @@ async function translateBatch(paragraphs, forcedSubject = null) {
         if (idx >= 0 && idx < paragraphs.length) parsed[idx] = parts[i + 1].trim();
       }
       if (paragraphs.length === 1 && !parsed[0]) parsed[0] = raw.trim();
-
+      console.log(`    [FALLBACK] Gemini succeeded`);
       return parsed.map((t, i) => {
         if (!t) return paragraphs[i];
         let r = applyGlossaryPostProcessing(t, paragraphs[i]);
@@ -90,60 +134,12 @@ async function translateBatch(paragraphs, forcedSubject = null) {
         return r;
       });
     } catch (err) {
-      const is429 = /429|quota|exhausted|rate.?limit/i.test(err.message);
-      const is503 = /503|unavailable|fetching from|ECONNRESET|ETIMEDOUT|network/i.test(err.message);
-      const isTimeout = /timeout/i.test(err.message);
-      const remaining = MAX_ATTEMPTS - attempt - 1;
-      if ((is429 || is503 || isTimeout) && remaining > 0) {
-        const wait = is429 ? RATE_LIMIT_WAIT : isTimeout ? 15000 : Math.min(30000 * (attempt + 1), 180000);
-        console.log(`    [${is429 ? '429' : is503 ? '503' : 'TIMEOUT'}] Waiting ${wait/1000}s... (attempt ${attempt+1}/${MAX_ATTEMPTS})`);
-        await new Promise(r => setTimeout(r, wait));
-        continue;
-      }
-      console.error(`    FAILED batch: ${err.message?.slice(0, 80)}`);
-      const openaiResult = await tryOpenAIFallback(paragraphs, systemPrompt, userMsg);
-      return openaiResult || paragraphs;
+      console.warn(`    [FALLBACK] Gemini also failed: ${err.message?.slice(0, 80)}`);
     }
   }
-  return paragraphs;
-}
 
-async function tryOpenAIFallback(paragraphs, systemPrompt, userMsg) {
-  if (!openai) {
-    console.warn(`    No OPENAI_API_KEY — keeping English.`);
-    return null;
-  }
-  console.log(`    [FALLBACK] Trying OpenAI ${OPENAI_MODEL}...`);
-  try {
-    const response = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      temperature: 0.1,
-      max_tokens: 8192,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMsg },
-      ],
-    });
-    const raw = response.choices[0]?.message?.content || '';
-    const parts = raw.split(/\n*<<<P?(\d+)>>>\s*/);
-    const parsed = Array(paragraphs.length).fill('');
-    for (let i = 1; i < parts.length - 1; i += 2) {
-      const idx = parseInt(parts[i], 10) - 1;
-      if (idx >= 0 && idx < paragraphs.length) parsed[idx] = parts[i + 1].trim();
-    }
-    if (paragraphs.length === 1 && !parsed[0]) parsed[0] = raw.trim();
-    const cached = response.usage?.prompt_tokens_details?.cached_tokens || 0;
-    console.log(`    [FALLBACK] OpenAI succeeded (cached ${cached} tokens)`);
-    return parsed.map((t, i) => {
-      if (!t) return paragraphs[i];
-      let r = applyGlossaryPostProcessing(t, paragraphs[i]);
-      r = applyHindiCorrections(r);
-      return r;
-    });
-  } catch (err) {
-    console.warn(`    [FALLBACK] OpenAI also failed: ${err.message?.slice(0, 100)}`);
-    return null;
-  }
+  console.error(`    FAILED batch: both providers unavailable.`);
+  return paragraphs;
 }
 
 // ── DOCX builder (from scratch, no template) ─────────────────────────────────
