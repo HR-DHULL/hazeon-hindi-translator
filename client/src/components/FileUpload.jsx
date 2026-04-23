@@ -292,7 +292,7 @@ function FileUpload({ onUploadComplete }) {
                 <p className="text-sm font-medium text-slate-700">
                   Drag &amp; drop your DOCX or PDF files, or <span className="text-indigo-600">browse</span>
                 </p>
-                <p className="text-xs text-slate-400 mt-1">DOCX & PDF · Max ~1000 paragraphs per file (roughly 35-50 pages). Larger files should use the CLI tool for reliable 97%+ accuracy.</p>
+                <p className="text-xs text-slate-400 mt-1">DOCX & PDF · Max ~5000 paragraphs per file (roughly 100-150 pages). Larger files should use the CLI tool.</p>
               </div>
             )}
           </div>

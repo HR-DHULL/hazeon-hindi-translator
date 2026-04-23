@@ -36,13 +36,14 @@ export async function processTranslation(jobId, filePath, baseName, bookContext,
     const parsed = await parseFile(filePath);
     const pageCount = parsed.pageCount;
 
-    // Hard gate: Render free tier can't reliably hit 97%+ on large docs.
-    // Route them to the CLI tool instead. Keeping the web UI for small docs ensures
-    // every web translation completes at high accuracy rather than producing 60-70% results.
-    const MAX_PARAGRAPHS_WEB = 1000;
+    // Hard gate: very large docs (>5000 paragraphs) may exceed Render free-tier
+    // request timeouts or memory limits during the multi-pass repair loop.
+    // With OpenAI gpt-4o-mini primary + Gemini fallback, docs up to ~5000 paragraphs
+    // reliably hit 97%+. Beyond that, use the CLI tool.
+    const MAX_PARAGRAPHS_WEB = 5000;
     const paragraphCount = parsed.paragraphTexts?.length || 0;
     if (paragraphCount > MAX_PARAGRAPHS_WEB) {
-      const msg = `Document has ${paragraphCount} paragraphs (limit: ${MAX_PARAGRAPHS_WEB}). Large files can't reliably hit 97%+ accuracy on the web service. Use the CLI tool (translate_local.js) for bulk work. See docs for details.`;
+      const msg = `Document has ${paragraphCount} paragraphs (limit: ${MAX_PARAGRAPHS_WEB}). Very large files may hit Render free-tier timeouts. Use the CLI tool (translate_local.js) for docs over ${MAX_PARAGRAPHS_WEB} paragraphs.`;
       await emit({ status: 'failed', message: msg, progress: 0 });
       throw new Error(msg);
     }
